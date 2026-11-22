@@ -1,0 +1,165 @@
+name: Calcite release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      build_packages:
+        description: Build the desktop and Android artifacts for inspection
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/ci.yml
+
+  desktop:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_packages)
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows
+          - runner: macos-latest
+            target: mac
+          - runner: ubuntu-latest
+            target: linux
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build desktop distributions
+        shell: pwsh
+        env:
+          CALCITE_RELEASE_DIR: release/ci
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if ('${{ matrix.target }}' -eq 'windows') {
+            $env:CSC_LINK = ''
+            npm run package -- --installer-only
+          } else {
+            npm run package -- --platform=${{ matrix.target }} --installer-only
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify iOS Capacitor project
+        if: matrix.target == 'mac'
+        run: npx cap sync ios
+      - name: Validate artifacts and generate checksums
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem release/ci -File | Sort-Object Name)
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $arch = if ((node -p process.arch) -eq 'arm64') { 'arm64' } else { 'x64' }
+          $expected = switch ('${{ matrix.target }}') {
+            'windows' { 'Calcite-Setup.exe' }
+            'mac' { "Calcite-$version-$arch.dmg"; "Calcite-$version-$arch.zip" }
+            'linux' {
+              $imageArch = if ($arch -eq 'x64') { 'x86_64' } else { $arch }
+              "Calcite-$version-$imageArch.AppImage"
+            }
+          }
+          if (Compare-Object -ReferenceObject @($expected) -DifferenceObject @($files.Name)) { throw 'Unexpected desktop artifact names' }
+          $files | ForEach-Object {
+            "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())  $($_.Name)"
+          } | Set-Content -Encoding utf8 "release/ci/SHA256SUMS-${{ matrix.target }}.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calcite-${{ matrix.target }}
+          path: release/ci/*
+          if-no-files-found: error
+
+  android:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_packages)
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - run: npm ci
+      - run: npm run notices
+      - run: npm run build
+      - name: Build Android APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          CALCITE_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          CALCITE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          CALCITE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          npx cap sync android
+          mkdir -p release/ci
+          if [[ -n "$ANDROID_KEYSTORE_BASE64" ]]; then
+            export CALCITE_ANDROID_KEYSTORE="$RUNNER_TEMP/calcite-signing.jks"
+            trap 'rm -f "$CALCITE_ANDROID_KEYSTORE"' EXIT
+            umask 077
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$CALCITE_ANDROID_KEYSTORE"
+            unset ANDROID_KEYSTORE_BASE64
+            bash android/gradlew -p android :app:assembleRelease
+            apk=Calcite-Android.apk
+            cp android/app/build/outputs/apk/release/app-release.apk "release/ci/$apk"
+          else
+            bash android/gradlew -p android :app:assembleDebug
+            apk=Calcite-Android-debug.apk
+            cp android/app/build/outputs/apk/debug/app-debug.apk "release/ci/$apk"
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "release/ci/$apk"
+          (cd release/ci && sha256sum "$apk" > SHA256SUMS-android.txt)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: calcite-android
+          path: release/ci/*
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: calcite-*
+          path: release
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --verify-tag --generate-notes
+          fi

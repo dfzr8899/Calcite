@@ -1,0 +1,74 @@
+.milkdown {
+  --crepe-color-background: var(--editor-bg);
+  --crepe-color-on-background: var(--text);
+  --crepe-color-surface: var(--sidebar-bg);
+  --crepe-color-surface-low: var(--input-bg);
+  --crepe-color-on-surface: var(--text);
+  --crepe-color-on-surface-variant: var(--muted);
+  --crepe-color-outline: var(--muted);
+  --crepe-color-primary: var(--accent);
+  --crepe-color-secondary: var(--row-bg);
+  --crepe-color-on-secondary: var(--heading);
+  --crepe-color-inverse: var(--heading);
+  --crepe-color-on-inverse: var(--editor-bg);
+  --crepe-color-inline-code: var(--pink);
+  --crepe-color-error: var(--pink);
+  --crepe-color-hover: var(--row-bg);
+  --crepe-color-selected: var(--selection);
+  --crepe-color-inline-area: var(--sidebar-bg);
+  --crepe-color-diff-added: var(--success);
+  --crepe-color-diff-added-text: var(--success);
+  --crepe-color-diff-added-bg: color-mix(in srgb, var(--success) 14%, transparent);
+  --crepe-color-diff-removed: var(--pink);
+  --crepe-color-diff-removed-text: var(--pink);
+  --crepe-color-diff-removed-bg: color-mix(in srgb, var(--pink) 14%, transparent);
+  --crepe-font-title: var(--font-ui);
+  --crepe-font-default: var(--font-ui);
+  --crepe-font-code: var(--font-code);
+  --crepe-base-font-size: 15.5px;
+  --crepe-shadow-1: var(--popup-shadow);
+  --crepe-shadow-2: var(--popup-shadow);
+  background: transparent;
+  color: var(--text);
+}
+
+.milkdown .ProseMirror:focus { outline: none; }
+.milkdown .ProseMirror .crepe-placeholder::before { color: var(--placeholder); }
+.milkdown .ProseMirror [data-language] { color: var(--muted); }
+.milkdown .milkdown-code-block {
+  padding: 6px 10px 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+}
+.milkdown .milkdown-code-block :is(.cm-editor, .cm-gutters, .tools) { background: var(--input-bg); }
+.milkdown .milkdown-code-block .cm-editor:not(.cm-focused) :is(.cm-activeLine, .cm-activeLineGutter) { background: transparent; }
+.milkdown .milkdown-code-block .cm-content { font: 13px/1.65 var(--font-code); }
+.milkdown .milkdown-code-block .cm-scroller { padding: 6px; }
+.milkdown .milkdown-slash-menu { z-index: 50; }
+.milkdown :is(.milkdown-slash-menu, .milkdown-toolbar, .milkdown-link-preview, .milkdown-link-edit, .list-wrapper, .operation-item) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.milkdown :is(.milkdown-slash-menu li, .toolbar-item, .milkdown-link-preview a, .milkdown-link-preview button, .milkdown-link-edit input, .milkdown-link-edit button) {
+  border-radius: var(--radius);
+}
+.milkdown :is(.milkdown-toolbar .toolbar-item, .milkdown-toolbar .divider) { margin: 2px; }
+.milkdown .milkdown-toolbar .toolbar-item { width: 25px; height: 25px; }
+.milkdown .milkdown-toolbar .toolbar-item svg { width: 17px; height: 17px; }
+.milkdown :is(.milkdown-latex-inline-edit, .milkdown-latex-inline-edit button, .milkdown-image-block .image-wrapper, .milkdown-image-inline .link-importer, .milkdown-image-inline .confirm, .milkdown-image-block .image-edit .confirm, .milkdown-table-block :is(.cell-handle, .button-group, .button-group button, .add-button), .top-bar-heading-dropdown) {
+  border-radius: var(--radius);
+}
+.milkdown :is(input:not([type="checkbox"]), textarea):focus-visible { outline: 1px solid var(--accent); }
+.milkdown .milkdown-table-block table { margin: 0; }
+.milkdown .ProseMirror :is(td, th) p { margin: 0; line-height: 1.55; }
+.milkdown .ProseMirror blockquote:not(.note-callout)::before { content: none; }
+
+.prose .hljs-comment, .prose .hljs-quote { color: var(--muted); font-style: italic; }
+.prose :is(.hljs-keyword, .hljs-selector-tag, .hljs-tag, .hljs-deletion) { color: var(--pink); }
+.prose :is(.hljs-string, .hljs-regexp, .hljs-meta .hljs-string) { color: var(--yellow); }
+.prose :is(.hljs-title.function_, .hljs-addition) { color: var(--success); }
+.prose :is(.hljs-number, .hljs-literal, .hljs-variable.constant_, .hljs-built_in) { color: var(--purple); }
+.prose :is(.hljs-title.class_, .hljs-type, .hljs-attr, .hljs-symbol, .hljs-link) { color: var(--link); }
+.prose .hljs-emphasis { font-style: italic; }
+.prose .hljs-strong { font-weight: 600; }

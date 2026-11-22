@@ -1,0 +1,42 @@
+name: Windows release checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npx playwright install chromium
+      - run: npm run test:smoke
+      - run: npx cap sync
+      - run: npm run package -- --installer-only
+      - name: Launch the packaged app
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'calcite-installer'
+          $seven = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          & $seven e 'release/Calcite-Setup.exe' '$PLUGINSDIR\app-64.7z' "-o$stage" -y -bso0
+          if ($LASTEXITCODE -ne 0) { throw 'Installer extraction failed' }
+          & $seven x (Join-Path $stage 'app-64.7z') "-o$stage" -y -bso0
+          if ($LASTEXITCODE -ne 0) { throw 'App extraction failed' }
+          node scripts/launch-smoke.cjs (Join-Path $stage 'Calcite.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged launch smoke failed' }
+          node scripts/interaction-smoke.cjs (Join-Path $stage 'Calcite.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged interaction smoke failed' }
+          Get-FileHash -Algorithm SHA256 -LiteralPath 'release/Calcite-Setup.exe'
