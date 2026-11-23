@@ -1,7 +1,9 @@
 node_modules/
 dist/
 release/
+# Local demo capture jobs and recording tools live in .test-data/.
 .test-data/
+/docs/media/*.webm
 .packaging/
 .packaging-*/
 failure.png

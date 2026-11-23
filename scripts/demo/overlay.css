@@ -1,0 +1,62 @@
+#calcite-demo-caption {
+  position: fixed;
+  z-index: 2147483646;
+  left: 24px;
+  bottom: 32px;
+  display: grid;
+  gap: 5px;
+  max-width: 600px;
+  box-sizing: border-box;
+  padding: 14px 21px 15px;
+  border: 1px solid #394a41;
+  border-left: 4px solid #c4f18c;
+  border-radius: 12px;
+  background: #101c1a;
+  color: #f7faf5;
+  box-shadow: 0 8px 26px #0005;
+  font-family: system-ui, "Microsoft YaHei UI", sans-serif;
+  line-height: 1.22;
+  pointer-events: none;
+}
+
+#calcite-demo-caption .demo-kicker {
+  color: #c4f18c;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+#calcite-demo-caption .demo-title {
+  font-size: 25px;
+  font-weight: 700;
+}
+
+#calcite-demo-caption .demo-translation {
+  color: #d9e5db;
+  font-size: 16px;
+}
+
+#calcite-demo-cursor {
+  position: fixed;
+  z-index: 2147483647;
+  top: 0;
+  left: 0;
+  width: 17px;
+  height: 17px;
+  display: none;
+  box-sizing: border-box;
+  border: 2px solid #d5faad;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #16251e, inset 0 0 0 1px #16251e;
+  pointer-events: none;
+  transition: box-shadow 140ms ease-out;
+}
+
+#calcite-demo-cursor.is-pressed {
+  box-shadow: 0 0 0 7px #c4f18770, 0 0 0 1px #16251e, inset 0 0 0 1px #16251e;
+}
+
+#source-editor .cm-line.calcite-demo-proof {
+  background: #253d30;
+  box-shadow: inset 3px 0 #c4f18c;
+}
