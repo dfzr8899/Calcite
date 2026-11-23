@@ -256,6 +256,22 @@
 [data-platform="mobile"] .feature-dialog.history-dialog {
   width:auto; height:auto; max-width:none; max-height:none; margin:0; border-radius:0;
 }
+[data-platform="mobile"] .feature-dialog.external-preview {
+  width:auto; height:auto; max-width:none; max-height:none; margin:0; border-radius:0; padding:12px;
+  overflow:hidden;
+}
+.external-preview[open] { display:flex; flex-direction:column; gap:8px; }
+.external-preview header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.external-preview header h2 { margin:0; overflow-wrap:anywhere; }
+.external-preview-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.external-preview :is(header,.external-preview-actions) button { min-height:40px; padding:4px 9px; }
+.external-preview nav { display:grid; max-height:25dvh; overflow:auto; }
+.external-preview nav button { min-height:36px; text-align:start; }
+.external-preview-body { flex:1; min-height:0; overflow:auto; overflow-wrap:anywhere; }
+.external-preview-body :is(pre,.mermaid) { overflow:auto; }
+.external-preview-body .table-wrap table { width:max-content; min-width:100%; max-width:none; }
+.external-preview-body :is(th,td) { min-width:96px; white-space:nowrap; }
+.external-preview-body .task-list-item { list-style:none; }
 [data-platform="mobile"] .history-controls { flex-wrap:wrap; justify-content:flex-start; }
 [data-platform="mobile"] .history-controls select { flex:1 1 100%; min-width:0; }
 [data-platform="mobile"] .history-dialog .sync-versions { grid-template-columns:minmax(0,1fr); }

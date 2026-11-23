@@ -1,6 +1,7 @@
 package io.calcite.notes;
 
 import com.getcapacitor.BridgeActivity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 import androidx.core.graphics.Insets;
@@ -16,6 +17,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(CalciteSecureStorage.class);
         registerPlugin(CalciteLegacyGitHttp.class);
         registerPlugin(CalciteDocumentPrint.class);
+        // BridgeActivity forwards the launch Intent after loading the plugins.
+        registerPlugin(CalciteExternalFiles.class);
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         View decor = getWindow().getDecorView();
@@ -34,5 +37,11 @@ public class MainActivity extends BridgeActivity {
             return new WindowInsetsCompat.Builder(insets).setInsets(system | keyboard, Insets.NONE).build();
         });
         ViewCompat.requestApplyInsets(content);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        setIntent(intent);
+        super.onNewIntent(intent);
     }
 }

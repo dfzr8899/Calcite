@@ -23,7 +23,7 @@ function protectCode(text,replace) {
   return result+text.slice(cursor);
 }
 
-export function renderNote(text, { numberEquations = false, macros } = {}) {
+export function renderNote(text, { numberEquations = false, macros, externalPreview = false } = {}) {
   const prefix = 'note-' + randomId();
   const renderToken = 'RENDERTOKEN'+prefix+'-';
   const codeToken = 'CODETOKEN'+prefix+'-';
@@ -83,7 +83,8 @@ export function renderNote(text, { numberEquations = false, macros } = {}) {
   function parse(value) {
     const content = document.createElement('div');
     content.innerHTML = DOMPurify.sanitize(marked.parse(decodeCodes(value),{gfm:true,breaks:false}),{
-      FORBID_TAGS:['iframe','frame'],
+      FORBID_TAGS:externalPreview?['iframe','frame','style','link','form','button','textarea','select','use','image','feImage']:['iframe','frame'],
+      ...(externalPreview?{ALLOW_DATA_ATTR:false,FORBID_ATTR:['src','srcset','style','background','poster','ping','action','formaction','autofocus']}:{}),
       ALLOWED_URI_REGEXP:/^(?:https?:|mailto:|tel:|calcite-wiki:\/\/|note-image:\/\/local\/|[^a-z]|[a-z+.-]+(?:[^a-z+.:\-]|$))/i
     });
     const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
@@ -154,4 +155,16 @@ export function renderNote(text, { numberEquations = false, macros } = {}) {
   }
   styleCallouts(container);
   return container.innerHTML;
+}
+
+export function wrapReadingTables(container) {
+  for(const table of container.querySelectorAll('table')){
+    const wrap=document.createElement('div');
+    wrap.className='table-wrap';
+    wrap.tabIndex=0;
+    wrap.setAttribute('role','region');
+    wrap.setAttribute('aria-label','横向滚动表格');
+    table.before(wrap);
+    wrap.append(table);
+  }
 }

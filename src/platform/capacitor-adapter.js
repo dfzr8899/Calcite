@@ -39,9 +39,11 @@ function relative(from,to) {
 const RichClipboard=registerPlugin('CalciteRichClipboard');
 const DocumentCapture=registerPlugin('CalciteDocumentCapture');
 const DocumentPrint=registerPlugin('CalciteDocumentPrint');
+const ExternalFiles=registerPlugin('CalciteExternalFiles');
 
 export function capacitorAdapter() {
   const android=Capacitor.getPlatform()==='android';
+  const externalFiles=android&&Capacitor.isPluginAvailable('CalciteExternalFiles');
   const directory=android?Directory.Data:Directory.Documents;
   const fs=createCapacitorGitFs(Filesystem,directory,{sandboxed:true});
   const io=fs.promises;
@@ -292,6 +294,9 @@ export function capacitorAdapter() {
     }
     text=normalizeLineEndings(path,text);
     await atomicWrite(path,text);
+    return savedFile(path,text);
+  }
+  async function savedFile(path,text) {
     const info=await io.stat(path);
     revision++;
     if(markdown.test(path)){
@@ -300,6 +305,20 @@ export function capacitorAdapter() {
     }
     localGit.schedule(root,path);
     return {path,mtime:info.mtimeMs};
+  }
+  async function importExternalFile(dir,{name,text}) {
+    if(!root||dir!==root)throw Error('知识库已切换，请重新确认导入。');
+    if(typeof text!=='string'||!text.trim())throw Error('外部文件为空。');
+    const stem=name.replace(/\.(?:md|markdown|mdown|txt)$/i,'').slice(0,84).replace(/[\uD800-\uDBFF]$/,'')
+      .replace(/[. ]+$/,'')||'未命名文档';
+    const content=normalizeLineEndings('.md',text);
+    for(let i=0;;i++){
+      const label=validName(stem+(i?' ('+i+')':'')+'.md');
+      const file=scoped(posixPath(root,label));
+      try{await io.writeFile(file,content,{flag:'wx'});}
+      catch(error){if(error.code==='EEXIST')continue;throw error;}
+      return savedFile(file,content);
+    }
   }
   async function trash(path) {
     const target=posixPath(root,'.trash',randomId(),basename(path));
@@ -462,7 +481,9 @@ export function capacitorAdapter() {
   return {
     type:'capacitor',os:Capacitor.getPlatform(),
     fs:{open:empty,read,save:data=>serialize(()=>save(data)),release:noop,reveal:unavailable,revealImage:unavailable,
-      attachment:data=>serialize(()=>attach(data)),imageSource,history:(path,id)=>localGit.history(root,path,id)},
+      attachment:data=>serialize(()=>attach(data)),imageSource,history:(path,id)=>localGit.history(root,path,id),
+      ...(externalFiles?{consumeExternalFile:()=>ExternalFiles.consumePendingExternalFile(),
+        importExternalFile:(dir,file)=>serialize(()=>importExternalFile(dir,file))}:{})},
     workspace:{
       async bootstrap(){
         if(android)await migrateVaults();
@@ -576,6 +597,7 @@ export function capacitorAdapter() {
       },async external(url){if(/^https?:\/\//i.test(url))window.open(url,'_blank','noopener,noreferrer');}},
     events:{action:noop,externalChange:listener=>desktopEvents.add(listener),focus:listener=>focus.add(listener),
       windowState:noop,sync:localGit.subscribe,network:listener=>Network.addListener('networkStatusChange',listener),
+      ...(externalFiles?{externalFile:listener=>ExternalFiles.addListener('externalFileAvailable',listener)}:{}),
       back:listener=>App.addListener('backButton',listener)}
   };
 }

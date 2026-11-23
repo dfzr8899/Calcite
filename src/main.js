@@ -47,7 +47,8 @@ import { installOutline, installLinkCompletion, noteHeadings, sourceOutlineFolds
 import { defaults, splitFrontmatter, propertiesCard, styleCallouts, liveNotesPlugin, liveWikiStatus, noteTags, noteExtension, diffView, pagebreakNode, remarkPagebreak } from './notes.js';
 import { installEditorTools } from './editor-tools.js';
 import { createWorkspaceUI } from './workspace-ui.js';
-import { renderNote } from './note-render.js';
+import {renderNote,wrapReadingTables} from './note-render.js';
+import {showExternalMarkdown} from './mobile-external-preview.js';
 import { createNoteWorkflows } from './note-workflows.js';
 import { createWorkspaceViews } from './workspace-views.js';
 import { platform } from './platform/index.js';
@@ -963,15 +964,7 @@ async function renderRead() {
       edit.textContent='编辑属性';
       properties.append(edit);
     }
-    if(mobileLayout())for(const table of container.querySelectorAll('table')){
-      const wrap=document.createElement('div');
-      wrap.className='table-wrap';
-      wrap.tabIndex=0;
-      wrap.setAttribute('role','region');
-      wrap.setAttribute('aria-label','横向滚动表格');
-      table.before(wrap);
-      wrap.append(table);
-    }
+    if(mobileLayout())wrapReadingTables(container);
     await renderDiagrams(container);
   } catch(error) {if(serial===renderSerial)console.warn(error);}
   if(serial===renderSerial){editorTools?.update();outlineUI?.schedule();}
@@ -1891,7 +1884,8 @@ async function prepareExport(tab,options,selection) {
     div.innerHTML=selection.html;
     await resolveImages(div,tab.path);
   } else {
-    await renderContent(div,selection?.markdown??tab.text,tab.path,undefined,undefined,undefined,{...preferences,numberEquations:options.numberEquations});
+    await renderContent(div,selection?.markdown??tab.text,tab.path,undefined,undefined,undefined,
+      {...preferences,numberEquations:options.numberEquations,externalPreview:tab.externalPreview});
     await renderDiagrams(div);
   }
   for(const element of div.querySelectorAll('[data-section-hidden]')) element.removeAttribute('data-section-hidden');
@@ -2016,6 +2010,46 @@ function openExternalFiles(paths) {
     }
   });
   return externalOpenQueue;
+}
+
+async function installExternalMarkdown() {
+  if(!platform.events.externalFile)return;
+  let preview,queue=Promise.resolve();
+  const receive=()=>{
+    queue=queue.then(async()=>{
+      const file=await platform.fs.consumeExternalFile();
+      if(file.error){
+        if(preview?.dialog.open)preview.message(file.error);
+        else toast(file.error);
+        return;
+      }
+      if(!file.name||typeof file.text!=='string')return;
+      preview?.dialog.close();
+      const opened=showExternalMarkdown(file,{
+        async render(body,text){
+          await renderContent(body,text,null,undefined,undefined,undefined,{...preferences,externalPreview:true});
+          await renderDiagrams(body);
+        },
+        async importNote(file){
+          if(!root||workspaceBusy)throw Error('当前知识库不可用，请稍后再试。');
+          await lockWorkspace(async()=>{
+            const {path}=await platform.fs.importExternalFile(root,file);
+            files=await platform.workspace.tree();
+            const tab=await loadDocumentTab(path);
+            tab.viewMode=mobileEditMode();
+            await activate(tab.id);
+          });
+        },
+        exportNote:(format,{name,text})=>saveExport(format,{name,text,path:null,externalPreview:true},defaultExportPreferences()),
+        openLink:url=>platform.window.external(url)
+      });
+      preview=opened;
+      opened.dialog.addEventListener('close',()=>{if(preview===opened)preview=null;},{once:true});
+    }).catch(fail);
+    return queue;
+  };
+  await platform.events.externalFile(receive).catch(fail);
+  await receive();
 }
 
 
@@ -2939,6 +2973,7 @@ async function boot(){
   $('#app').inert = false;
   $('#startup-status').hidden = true;
   await openExternalFiles(arriving);
+  await installExternalMarkdown();
   if (root&&restored) updateTabsFromDisk({root,changes:restored.tabs.filter(tab=>tab.path&&containsPath(root,tab.path,fileKey))
     .map(tab=>({path:tab.path,type:'change'}))}).catch(fail);
   session();

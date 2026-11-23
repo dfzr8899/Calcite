@@ -24,6 +24,82 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/x-markdown" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- API 31+ matches the final suffix. Earlier Android versions use simple globs,
+                 including separate patterns for dots before the extension. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathSuffix=".md" />
+                <data android:pathSuffix=".MD" />
+                <data android:pathSuffix=".markdown" />
+                <data android:pathSuffix=".MARKDOWN" />
+                <data android:pathPattern=".*\\.md" />
+                <data android:pathPattern=".*\\..*\\.md" />
+                <data android:pathPattern=".*\\..*\\..*\\.md" />
+                <data android:pathPattern=".*\\.MD" />
+                <data android:pathPattern=".*\\..*\\.MD" />
+                <data android:pathPattern=".*\\..*\\..*\\.MD" />
+                <data android:pathPattern=".*\\.markdown" />
+                <data android:pathPattern=".*\\..*\\.markdown" />
+                <data android:pathPattern=".*\\..*\\..*\\.markdown" />
+            </intent-filter>
+
+            <!-- Android resolves VIEW intents with no MIME type against a separate filter. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:pathSuffix=".md" />
+                <data android:pathSuffix=".MD" />
+                <data android:pathSuffix=".markdown" />
+                <data android:pathSuffix=".MARKDOWN" />
+                <data android:pathPattern=".*\\.md" />
+                <data android:pathPattern=".*\\..*\\.md" />
+                <data android:pathPattern=".*\\..*\\..*\\.md" />
+                <data android:pathPattern=".*\\.MD" />
+                <data android:pathPattern=".*\\..*\\.MD" />
+                <data android:pathPattern=".*\\..*\\..*\\.MD" />
+                <data android:pathPattern=".*\\.markdown" />
+                <data android:pathPattern=".*\\..*\\.markdown" />
+                <data android:pathPattern=".*\\..*\\..*\\.markdown" />
+            </intent-filter>
+
+            <intent-filter>
+                <!-- Some providers expose only an opaque content:// ID for attachments. -->
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" android:mimeType="application/octet-stream" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/x-markdown" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+
         </activity>
 
         <provider

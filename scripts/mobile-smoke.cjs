@@ -124,6 +124,11 @@ function registerNativeMock(factory,seed,options={}) {
   const prefs=new Map(Object.entries(options.prefs||{}).map(([key,value])=>[key,JSON.stringify(value)]));
   const outputs=[];
   const fixture={head:null,objects:[],written:0,waiting:false,requests:[]};
+  let pendingExternalFile=options.externalFile, externalListener;
+  fixture.deliverExternalFile=file=>{
+    pendingExternalFile=file;
+    externalListener?.({});
+  };
   const rename=filesystem.rename;
   filesystem.rename=async options=>{
     if(/\/Batch-\d+\.md$/.test(options.to)&&++fixture.written===66) {
@@ -164,6 +169,11 @@ function registerNativeMock(factory,seed,options={}) {
     Clipboard:{async write(value){outputs.push(value);},async read(){return {value:''};}},
     Share:{async canShare(){return {value:true};},async share(data){outputs.push(data);}},
     CalciteRichClipboard:{async write(data){outputs.push(data);},async readImage(){return fixture.clipboardImage||{};}},
+    CalciteExternalFiles:{async consumePendingExternalFile(){
+      const file=pendingExternalFile;
+      pendingExternalFile=null;
+      return file||{};
+    }},
     CalciteDocumentPrint:{async pdf(data){outputs.push({...data,print:true});}}
   };
   globalThis.androidBridge={};
@@ -173,7 +183,11 @@ function registerNativeMock(factory,seed,options={}) {
       {name:'addListener',rtype:'callback'},{name:'removeListener',rtype:'promise'}
     ]})),
     nativePromise:(name,method,data)=>method==='removeListener'?Promise.resolve():mock[name][method](data),
-    nativeCallback:()=>1,
+    nativeCallback:(name,method,options,listener)=>{
+      if(name==='CalciteExternalFiles'&&method==='addListener'&&options.eventName==='externalFileAvailable')
+        externalListener=listener;
+      return 1;
+    },
     convertFileSrc:uri=>location.origin+'/_capacitor_file_/'+uri.replace(/^file:\/\/\//,'')
   };
   globalThis.calciteTest={filesystem,prefs,outputs,fixture};
@@ -228,6 +242,61 @@ function chromiumOptions() {
   const roots=[process.env.ProgramFiles,process.env.LOCALAPPDATA].filter(Boolean);
   const installed=roots.map(root=>path.join(root,'Google','Chrome','Application','chrome.exe')).find(existsSync);
   return installed?{executablePath:installed}:{};
+}
+
+async function externalFileSmoke(browser,url) {
+  const vault='CalciteVaults/外部文件';
+  const original=vault+'/v1.0.notes.md';
+  const encode=text=>Buffer.from(text,'utf8').toString('base64');
+  const text='# 外部文档\r\n\r\n$E=mc^2$\r\n\r\n## 第二节\r\n\r\n'+
+    '| 测试 | 内容 |\r\n| --- | --- |\r\n| 甲 | 乙 |\r\n\r\n';
+  const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true});
+  try {
+    const options={externalFile:{name:'v1.0.notes.MD',text:text+'~~~js\r\nconst flag = true;\r\n~~~\r\n'},
+      prefs:{vault:'/'+vault,['git:/'+vault]:{settings:{enabled:false}}}};
+    await context.addInitScript({content:'('+registerNativeMock.toString()+')('+memoryFilesystem.toString()+','+
+      JSON.stringify({[original]:encode('# 原有笔记\n')})+','+JSON.stringify(options)+');'});
+    const page=await context.newPage();
+    await page.goto(url);
+    const preview=page.getByRole('dialog',{name:'外部临时预览'});
+    await preview.getByRole('heading',{name:'外部临时预览 · v1.0.notes.MD',exact:true}).waitFor();
+    await preview.locator('.hljs-keyword').first().waitFor();
+    await preview.locator('.katex').first().waitFor();
+    await preview.getByRole('region',{name:'横向滚动表格'}).waitFor();
+    await preview.getByText('大纲',{exact:true}).tap();
+    await preview.getByRole('navigation',{name:'外部文件大纲'}).getByRole('button',{name:'第二节'}).tap();
+    const documents=()=>page.evaluate(path=>[...calciteTest.filesystem.store.keys()].filter(key=>
+      key.startsWith('DATA:'+path+'/')&&key.endsWith('.md')),vault);
+    assert.deepEqual(await documents(),['DATA:'+original]);
+    await preview.getByRole('button',{name:'导出 PDF'}).tap();
+    await page.waitForFunction(()=>calciteTest.outputs.some(row=>row.print&&row.title==='v1.0.notes'));
+    await preview.getByRole('button',{name:'导出长图'}).tap();
+    await page.waitForFunction(()=>calciteTest.outputs.some(row=>row.files?.some(file=>file.endsWith('.png'))));
+    assert.deepEqual(await documents(),['DATA:'+original]);
+
+    await preview.getByRole('button',{name:'导入到当前知识库'}).tap();
+    await preview.waitFor({state:'hidden'});
+    await page.locator('#document-name').filter({hasText:'v1.0.notes (1).md'}).waitFor({state:'attached'});
+    await page.locator('#source-editor .cm-content').getByText(/外部文档/).waitFor();
+    const imported=await page.evaluate(path=>Object.fromEntries([...calciteTest.filesystem.store].filter(([key])=>
+      key.startsWith('DATA:'+path+'/')&&key.endsWith('.md')).map(([key,row])=>[key,row.data])),vault);
+    assert.equal(imported['DATA:'+original],encode('# 原有笔记\n'));
+    assert.equal(imported['DATA:'+vault+'/v1.0.notes (1).md'],encode(options.externalFile.text.replaceAll('\r\n','\n')));
+
+    const deliver=file=>page.evaluate(file=>calciteTest.fixture.deliverExternalFile(file),file);
+    await deliver({name:'另一份.markdown',text:'# 热启动文件'});
+    await preview.getByRole('heading',{name:'热启动文件',exact:true}).waitFor();
+    await preview.getByRole('button',{name:'关闭外部预览'}).tap();
+    await preview.waitFor({state:'hidden'});
+    await page.locator('#document-name').filter({hasText:'v1.0.notes (1).md'}).waitFor({state:'attached'});
+    for(const error of ['外部文件为空。','外部文件包含二进制内容，无法预览。','没有权限读取外部文件。']){
+      await deliver({error});
+      await page.locator('#toast').filter({hasText:error}).waitFor();
+      assert.equal(await preview.count(),0);
+    }
+    assert.equal((await documents()).length,2);
+    console.log('External Markdown passed: cold and warm consumption, isolated preview, outline, PDF/PNG, LF duplicate import and read errors.');
+  }finally{await context.close();}
 }
 
 async function uiSmoke() {
@@ -771,6 +840,7 @@ async function uiSmoke() {
     await defaultVault.locator('#app:not([inert])').waitFor();
     assert.equal(await defaultVault.evaluate(()=>JSON.parse(calciteTest.prefs.get('vault'))),'/CalciteVaults/我的笔记');
     await fallback.close();
+    await externalFileSmoke(browser,url);
     console.log('Mobile UI passed: vault lifecycle and isolated pairing, direct sync, four navigation entries, first-run guide, task lists, touch editing, exports, graph gestures, and conflict resolution.');
   }finally{await browser?.close();server.close();}
 }
