@@ -1,3 +1,4 @@
+import {getLocale, t as tr} from "../shared/i18n/index.mjs";
 import {isMobileUI,showDialog,settingToggle} from './mobile-ui.js';
 import { createIcons, Search, X, Minus, Plus, Scan, SlidersHorizontal, Layers, ChevronDown } from 'lucide';
 import { createGraphCanvas } from './graph-canvas.js';
@@ -22,13 +23,13 @@ function graphModel(data,selected,relative,caseInsensitive) {
   if (!nested.some(({parts})=>parts.length>layer+1)) layer=0;
   for (const {path,file,parts} of entries) {
     const directory=parts.length>layer+1?parts[layer]:'';
-    if (!groups.has(directory)) groups.set(directory,{name:directory||'根目录',id:groups.size,count:0,color:5});
+    if (!groups.has(directory)) groups.set(directory,{name:directory||tr("graphView.root"),id:groups.size,count:0,color:5});
     const group=groups.get(directory);
     group.count++;
     paths.set(key(path),{path,file,group,id:paths.size,degree:0,opacity:1,neighbors:new Set(),
       name:parts.at(-1).replace(/\.(?:md|markdown|mdown)$/i,'')});
   }
-  const namedGroups=[...groups].filter(([name])=>name).sort(([a],[b])=>a.localeCompare(b,'zh-CN',{numeric:true}));
+  const namedGroups=[...groups].filter(([name])=>name).sort(([a],[b])=>a.localeCompare(b,getLocale(),{numeric:true}));
   namedGroups.forEach(([,group],index)=>{group.color=index%6;});
   const nodes=[...paths.values()];
   const current=selected?paths.get(key(selected)):undefined;
@@ -79,44 +80,44 @@ export function showGraph(data,{selected,relative,caseInsensitive,local:initialL
   const {nodes,edges,current,groups}=model;
   const panel=document.createElement('dialog');
   panel.className='graph-dialog';
-  panel.setAttribute('aria-label','笔记图谱');
+  panel.setAttribute('aria-label',tr("graphView.noteGraph"));
   panel.innerHTML=`
-    <canvas class="graph-board" tabindex="0" ${mobile?'autofocus':''} aria-label="图谱画布。方向键选择节点，回车打开，加减键缩放，0 适应画布。"></canvas>
+    <canvas class="graph-board" tabindex="0" ${mobile?'autofocus':''} aria-label="${tr("graphView.noteGraphUseArrowKeysToSelect")}"></canvas>
     <div class="graph-top">
       <div class="graph-top-row">
-        <label class="graph-glass graph-search">${icon('search')}<input type="search" aria-label="筛选图谱" placeholder="筛选笔记" ${mobile?'':'autofocus'} spellcheck="false"></label>
+        <label class="graph-glass graph-search">${icon('search')}<input type="search" aria-label="${tr("graphView.filterGraph")}" placeholder="${tr("graphView.filterNotes")}" ${mobile?'':'autofocus'} spellcheck="false"></label>
         <output class="graph-glass graph-count" aria-live="polite"></output>
       </div>
       <div class="graph-top-row">
-        <div class="graph-glass graph-segments" role="group" aria-label="图谱范围">
-          <button type="button" data-graph="global" aria-pressed="true">全库</button>
-          <button type="button" data-graph="local" aria-pressed="false">局部</button>
+        <div class="graph-glass graph-segments" role="group" aria-label="${tr("graphView.graphScope")}">
+          <button type="button" data-graph="global" aria-pressed="true">${tr("graphView.allNotes")}</button>
+          <button type="button" data-graph="local" aria-pressed="false">${tr("graphView.local")}</button>
         </div>
-        <div class="graph-glass graph-segments graph-hops" role="group" aria-label="局部关系深度" hidden>
-          <button type="button" data-hops="1" aria-pressed="true">1 跳</button>
-          <button type="button" data-hops="2" aria-pressed="false">2 跳</button>
+        <div class="graph-glass graph-segments graph-hops" role="group" aria-label="${tr("graphView.localGraphDepth")}" hidden>
+          <button type="button" data-hops="1" aria-pressed="true">${tr("graphView.1Hop")}</button>
+          <button type="button" data-hops="2" aria-pressed="false">${tr("graphView.2Hops")}</button>
         </div>
       </div>
     </div>
-    <form method="dialog" class="graph-close graph-glass">${control('close','关闭图谱','x')}</form>
+    <form method="dialog" class="graph-close graph-glass">${control('close',tr("graphView.closeGraph"),'x')}</form>
     <div class="graph-message" hidden></div>
     <details class="graph-legend graph-glass">
-      <summary>${icon('layers')}目录分组${icon('chevron-down')}</summary>
-      <div class="graph-legend-list" aria-label="按目录高亮" data-graph-popover></div>
+      <summary>${icon('layers')}${tr("graphView.folderGroups")}${icon('chevron-down')}</summary>
+      <div class="graph-legend-list" aria-label="${tr("graphView.highlightByFolder")}" data-graph-popover></div>
     </details>
-    <div class="graph-glass graph-navigation" role="group" aria-label="图谱操控">
-      ${control('out','缩小','minus')}${control('in','放大','plus')}${control('fit','适应画布','scan')}
+    <div class="graph-glass graph-navigation" role="group" aria-label="${tr("graphView.graphControls")}">
+      ${control('out',tr("main.zoomOut"),'minus')}${control('in',tr("main.zoomIn"),'plus')}${control('fit',tr("graphView.fitToView"),'scan')}
       <details class="graph-settings">
-        <summary aria-label="显示设置" title="显示设置">${icon('sliders-horizontal')}</summary>
+        <summary aria-label="${tr("graphView.displayOptions")}" title="${tr("graphView.displayOptions")}">${icon('sliders-horizontal')}</summary>
         <div class="graph-glass graph-settings-panel" data-graph-popover>
-          <span>节点斥力</span>
-          <div class="graph-segments" role="group" aria-label="节点斥力">
-            <button type="button" data-repulsion="0.65" aria-pressed="false">紧凑</button>
-            <button type="button" data-repulsion="1" aria-pressed="true">标准</button>
-            <button type="button" data-repulsion="1.55" aria-pressed="false">舒展</button>
+          <span>${tr("graphView.nodeRepulsion")}</span>
+          <div class="graph-segments" role="group" aria-label="${tr("graphView.nodeRepulsion")}">
+            <button type="button" data-repulsion="0.65" aria-pressed="false">${tr("graphView.compact")}</button>
+            <button type="button" data-repulsion="1" aria-pressed="true">${tr("graphView.standard")}</button>
+            <button type="button" data-repulsion="1.55" aria-pressed="false">${tr("graphView.spacious")}</button>
           </div>
-          ${settingToggle('isolates','显示孤立节点',{checked:true})}
-          ${settingToggle('skipHubs','局部图谱忽略高度数枢纽',{checked:true})}
+          ${settingToggle('isolates',tr("graphView.showIsolatedNodes"),{checked:true})}
+          ${settingToggle('skipHubs',tr("graphView.ignoreHighlyConnectedHubsInLocalGraph"),{checked:true})}
         </div>
       </details>
     </div>
@@ -133,7 +134,7 @@ export function showGraph(data,{selected,relative,caseInsensitive,local:initialL
   const close=$('[data-graph="close"]');
   close.type='submit';
   localButton.disabled=!current;
-  if (!current) localButton.title='先打开一篇工作区内的笔记';
+  if (!current) localButton.title=tr("graphView.openANoteInTheWorkspaceFirst");
   let local=Boolean(initialLocal&&current),hops=1,groupFilter,worker,ready=false;
   let shown=[],matching=[];
 
@@ -173,9 +174,9 @@ export function showGraph(data,{selected,relative,caseInsensitive,local:initialL
     matching=filtered ? shown.filter(node=>(groupFilter===undefined||node.group.id===groupFilter)
       && (!query||node.file.toLocaleLowerCase().includes(query))) : shown;
     renderer.setMatches(filtered?new Set(matching.map(node=>node.id)):null);
-    $('.graph-count').textContent=filtered?`${matching.length} / ${shown.length} 篇笔记`:`${shown.length} 篇笔记`;
+    $('.graph-count').textContent=filtered?tr("graphView.notes",{arg1:matching.length,arg2:shown.length}):tr("graphView.notes2",{arg1:shown.length});
     const message=$('.graph-message');
-    const text=!ready?'正在布局…':!nodes.length?'工作区暂无笔记':!shown.length?'没有可见节点':!matching.length?'没有匹配的笔记':'';
+    const text=!ready?tr("graphView.layingOut"):!nodes.length?tr("graphView.noNotesInThisWorkspace"):!shown.length?tr("graphView.noVisibleNodes"):!matching.length?tr("graphView.noMatchingNotes"):'';
     message.hidden=!text;
     message.textContent=text;
   }

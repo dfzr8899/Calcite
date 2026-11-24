@@ -1,16 +1,18 @@
+import {t as tr} from "../shared/i18n/index.mjs";
+import {languagePicker} from './localization.js';
 import {errorMessage} from './error-message.js';
-import {isMobileUI,showDialog} from './mobile-ui.js';
+import {isMobileUI,settingsGroup,showDialog} from './mobile-ui.js';
 
-const sections = [
-  ['writing','写作与公式','pen-line'],
-  ['shortcuts','快捷键','keyboard'],
-  ['sync','同步与配对','refresh-cw'],
-  ['attachments','附件管家','paperclip'],
-  ['appearance','外观','sun-moon']
+const sections = () => [
+  ['writing',tr("settingsCenter.editorMath"),'pen-line'],
+  ['shortcuts',tr("settingsCenter.shortcuts"),'keyboard'],
+  ['sync',tr("settingsCenter.syncPairing"),'refresh-cw'],
+  ['attachments',tr("settingsCenter.attachments"),'paperclip'],
+  ['appearance',tr("main.appearance2"),'sun-moon']
 ];
-const mobileLabels={writing:'写作',sync:'同步',attachments:'附件'};
+const labels=()=>({writing:tr("settingsCenter.editor"),sync:tr("settingsCenter.sync"),attachments:tr("settingsCenter.files")});
 
-export function createSettingsCenter({icon,glyphs,mount,fail}) {
+export function createSettingsCenter({icon,glyphs,mount,fail,saveLanguage}) {
   let state;
   function open(key='writing') {
     const horizontal=isMobileUI();
@@ -20,12 +22,13 @@ export function createSettingsCenter({icon,glyphs,mount,fail}) {
       return;
     }
     const dialog = document.createElement('dialog');
-    const pages=horizontal?sections.filter(([id])=>mobileLabels[id]):sections;
+    const mobileLabels=labels();
+    const pages=horizontal?sections().filter(([id])=>mobileLabels[id]):sections();
     dialog.className = 'feature-dialog settings-center';
     dialog.setAttribute('aria-labelledby','settings-title');
-    dialog.innerHTML = `<header class="settings-header"><h2 id="settings-title">设置中心</h2>
-      <form method="dialog"><button type="submit" aria-label="关闭设置中心" title="关闭设置中心">${icon('x')}</button></form></header>
-      <div class="settings-layout"><nav role="tablist" aria-label="设置分类" aria-orientation="vertical">
+    dialog.innerHTML = `<header class="settings-header"><h2 id="settings-title">${tr("main.settings")}</h2>
+      <form method="dialog"><button type="submit" aria-label="${tr("settingsCenter.closeSettings")}" title="${tr("settingsCenter.closeSettings")}">${icon('x')}</button></form></header>
+      <div class="settings-layout"><nav role="tablist" aria-label="${tr("settingsCenter.settingsSections")}" aria-orientation="vertical">
       ${pages.map(([id,label,glyph])=>`<button type="button" id="settings-tab-${id}" role="tab" aria-controls="settings-${id}" data-section="${id}">${icon(glyph)}<span>${horizontal?mobileLabels[id]:label}</span></button>`).join('')}
       </nav><div class="settings-pages">
       ${pages.map(([id,label])=>`<section class="settings-page" id="settings-${id}" role="tabpanel" aria-labelledby="settings-tab-${id}" tabindex="0" hidden>${horizontal?'':`<h3>${label}</h3>`}<div class="settings-content"></div></section>`).join('')}
@@ -44,9 +47,15 @@ export function createSettingsCenter({icon,glyphs,mount,fail}) {
       if (mounted.has(id)) return;
       mounted.add(id);
       const content = dialog.querySelector('#settings-'+id+' .settings-content');
+      const picker=(horizontal?id==='writing':id==='appearance')?languagePicker(saveLanguage):null;
       Promise.resolve().then(()=>mount[id](content,{
         mobile:horizontal,signal:controller.signal,close:()=>dialog.close()
-      })).catch(error=>{
+      })).then(()=>{
+        if(!picker||controller.signal.aborted)return;
+        const scroll=horizontal?content.querySelector('.lg-settings-scroll'):content;
+        scroll.insertAdjacentHTML('afterbegin',settingsGroup(tr('dataSafety.general'),''));
+        scroll.querySelector('.lg-group').append(picker);
+      }).catch(error=>{
         if (controller.signal.aborted) return;
         const status = document.createElement('p');
         status.setAttribute('role','status');
@@ -75,6 +84,7 @@ export function createSettingsCenter({icon,glyphs,mount,fail}) {
       if (state?.dialog===dialog) state = undefined;
       dialog.remove();
     },{once:true});
+    dialog.addEventListener("language-error",event=>fail(event.detail));
     state = {dialog,select};
     document.body.append(dialog);
     glyphs();
@@ -82,5 +92,11 @@ export function createSettingsCenter({icon,glyphs,mount,fail}) {
     showDialog(dialog);
     tabs.find(tab=>tab.dataset.section===key)?.focus({preventScroll:true});
   }
-  return {open};
+  return {open,relocalize(){
+    if(!state?.dialog.open)return;
+    const key=state.dialog.querySelector("[aria-selected=true]")?.dataset.section;
+    state.dialog.close();
+    state.dialog.remove();
+    open(key);
+  }};
 }

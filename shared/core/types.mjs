@@ -1,5 +1,6 @@
 /**
  * @typedef {object} SyncConfig
+ * @property {'lww-history'|'conflict-copy'} conflictStrategy
  * @property {boolean} enabled
  * @property {'lan'|'remote'} mode
  * @property {boolean} auto

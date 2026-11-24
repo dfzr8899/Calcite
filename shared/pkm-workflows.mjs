@@ -1,3 +1,4 @@
+import {getLocale, t as tr} from "./i18n/index.mjs";
 export function tagTree(notes) {
   const roots=new Map();
   for(const {path,tags} of notes)for(const tag of tags||[]){
@@ -11,7 +12,8 @@ export function tagTree(notes) {
       children=node.children;
     }
   }
-  const flatten=map=>[...map.values()].sort((a,b)=>a.label.localeCompare(b.label,'zh-CN'))
+  const locale=getLocale();
+  const flatten=map=>[...map.values()].sort((a,b)=>a.label.localeCompare(b.label,locale))
     .map(node=>({...node,paths:[...node.paths],children:flatten(node.children)}));
   return flatten(roots);
 }
@@ -20,7 +22,7 @@ const pad=value=>String(value).padStart(2,'0');
 export function noteDateParts(date) {
   const YYYY=String(date.getFullYear()),MM=pad(date.getMonth()+1),DD=pad(date.getDate());
   return {YYYY,MM,DD,date:YYYY+'-'+MM+'-'+DD,time:pad(date.getHours())+':'+pad(date.getMinutes()),
-    weekday:new Intl.DateTimeFormat('zh-CN',{weekday:'long'}).format(date)};
+    weekday:new Intl.DateTimeFormat(getLocale(),{weekday:'long'}).format(date)};
 }
 
 export function expandNoteTemplate(text,{title,vault,date}) {
@@ -32,7 +34,7 @@ export function dailyNoteName(pattern,date) {
   const values=noteDateParts(date);
   const name=String(pattern||'YYYY-MM-DD').trim().replace(/YYYY|MM|DD/g,token=>values[token]).replace(/\.md$/i,'');
   if(!name||name.length>96||/^[.]|[. ]$|[\\/:*?"<>|\x00-\x1f]/.test(name))
-    throw Error('每日笔记文件名格式无效。');
+    throw Error(tr("pkmWorkflows.invalidDailyNoteFilenameFormat"));
   return name;
 }
 

@@ -1,3 +1,4 @@
+import {t as tr} from "../../shared/i18n/index.mjs";
 import {Capacitor,registerPlugin} from '@capacitor/core';
 
 export const nativeSecureStore=registerPlugin('CalciteSecureStorage');
@@ -31,7 +32,7 @@ export function createMobileSecrets(nativeStore=Capacitor.isPluginAvailable('Cal
           try {await nativeStore.set({key,value});memory.delete(key);continue;}
           catch(error) {
             available=false;
-            if(value==='')throw new Error('无法从系统安全存储清除凭据，请重试。',{cause:error});
+            if(value==='')throw new Error(tr("capacitorSecureStorage.couldNotClearCredentialsFromSecureStorage"),{cause:error});
           }
         }
         memory.set(key,value);

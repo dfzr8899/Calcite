@@ -1,3 +1,4 @@
+const {t:tr}=require("../shared/i18n/index.mjs");
 const http=require('node:http');
 const crypto=require('node:crypto');
 const QRCode=require('qrcode');
@@ -33,7 +34,7 @@ async function createConfigPair(config,{network=true}={}) {
   try{
     const port=server.address().port;
     const urls=(network?localEndpoints(port):['http://127.0.0.1:'+port]).slice(0,3);
-    if(!urls.length)throw Error('找不到局域网地址，请连接 Wi-Fi 或手机热点。');
+    if(!urls.length)throw Error(tr("configPair.noLanAddressFoundConnectToWi"));
     const packet=writePacket('calcite-remote:',{urls,cap:cap.toString('hex'),key:key.toString('base64'),expires});
     return {close,view:{packet,image:await QRCode.toDataURL(packet,{margin:2,width:300}),expires}};
   }catch(error){close();throw error;}

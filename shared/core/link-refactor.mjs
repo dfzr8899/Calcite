@@ -1,4 +1,5 @@
-import {encodeWiki,headingIdentifiers,headingIndex,headingSlug,linkDirectory,mapLinks,markdown,markdownNodes,splitLink} from '../note-links.mjs';
+import {t as tr} from "../i18n/index.mjs";
+import {encodeWiki,headingSlug,linkDirectory,mapLinks,markdown,markdownNodes,splitLink} from '../note-links.mjs';
 import {splitFrontmatter} from '../note-metadata.mjs';
 import {normalizeLineEndings} from '../text-files.mjs';
 
@@ -62,25 +63,31 @@ export function rewriteLinks(text, source, move, before, after, path, key) {
 export async function planLinkRefactor(index,from,to,drafts,read) {
   const {path,key,within,root}=index;
   const move=file=>within(from,file)?to+file.slice(from.length):file;
-  const movedNotes=new Map(index.paths().map(file=>[key(move(file)),file]));
-  const after=linkDirectory(root,path,key,[...movedNotes.values()].map(move));
-  const rewrite=async(text,file)=>{
+  const after=linkDirectory(root,path,key,index.paths().map(move));
+  const rewrite=(text,file)=>{
     const {prefix,body}=splitFrontmatter(text);
-    const block=splitReferenceBlock(body);
-    const result=rewriteLinks(prefix+block.body,file,move,index.directory,after,path,key);
-    if(!block.suffix)return result;
-    const source=move(file);
-    const generated=await updateReferenceDefinitions(result.text,links=>links.map(destination=>{
-      const {target,heading}=after.resolve(source,destination,true);
-      if(!target)return null;
-      const note=index.notes.get(key(movedNotes.get(key(target))||target));
-      if(!note)return null;
-      const fragment=heading.slice(1);
-      const headings=headingIdentifiers(note.headings);
-      const row=fragment?headings[headingIndex(headings,fragment)]:null;
-      return !fragment||row?{path:target,heading:fragment,slug:row?.slug,title:note.title}:null;
-    }),target=>path.relative(path.dirname(source),target));
-    return {text:generated.text,count:result.count};
+    const {suffix}=splitReferenceBlock(body);
+    const result=rewriteLinks(text,file,move,index.directory,after,path,key);
+    if(!suffix)return result;
+    // Generated definitions mirror their wiki labels. Update those label spans
+    // in place just as we update definition destinations in ordinary Markdown.
+    const offset=result.text.indexOf(startMarker,prefix.length);
+    const block=splitReferenceBlock(splitFrontmatter(result.text).body).suffix;
+    if(!block||result.text.slice(offset,offset+block.length)!==block)return result;
+    const labels=[];
+    markdownNodes(block,(node,start,end)=>{
+      if(node.type!=='definition')return;
+      const label=/^ {0,3}\[([^\]\r\n]+)\]:/.exec(block.slice(start,end))?.[1];
+      if(!label)return;
+      const next=rewriteLinks('[['+label+']]',file,move,index.directory,after,path,key).text.slice(2,-2);
+      if(next!==label){
+        const at=offset+start+block.slice(start,end).indexOf('[')+1;
+        labels.push({at,end:at+label.length,next});
+      }
+    });
+    for(const span of labels.reverse())result.text=result.text.slice(0,span.at)+span.next+result.text.slice(span.end);
+    result.count+=labels.length;
+    return result;
   };
   const draftByPath=new Map(drafts.map(draft=>[key(draft.path),draft]));
   const changes=[];
@@ -88,18 +95,88 @@ export async function planLinkRefactor(index,from,to,drafts,read) {
   for(const file of index.affectedByMove(move,after.resolve,drafts)){
     const {text,mtime}=await read(file);
     const dest=move(file);
-    const result=await rewrite(text,file);
+    const result=rewrite(text,file);
     const draft=draftByPath.get(key(file));
-    const edited=draft?await rewrite(draft.text,file):null;
+    const edited=draft?rewrite(draft.text,file):null;
     if(result.text===text&&dest===file&&(!edited||edited.text===draft.text))continue;
     if(draft?.saved!==undefined&&normalizeLineEndings(file,draft.saved)!==normalizeLineEndings(file,text))
-      throw Error('笔记已在别处修改，请先处理冲突：'+path.basename(file));
+      throw Error(tr("linkRefactor.thisNoteChangedElsewhereResolveTheConflict")+path.basename(file));
     const count=Math.max(result.count,edited?.count||0);
     if(count){references+=count;notes++;}
-    changes.push({from:file,path:dest,previous:text,saved:result.text!==text?normalizeLineEndings(dest,result.text):text,
-      mtime,draft:edited?.text});
+    changes.push({from:file,path:dest,previous:text,saved:result.text,
+      mtime,count:result.count,draft:edited?.text});
   }
   return {move,changes,refactor:{notes,references}};
+}
+
+/**
+ * @param {string} text
+ * @param {string} root
+ * @param {(file: string) => string} move
+ * @param {PathOperations} path
+ * @param {(parent: string, file: string) => boolean} within
+ */
+export function rewriteCanvasLinks(text,root,move,path,within) {
+  const board=JSON.parse(text.replace(/^\uFEFF/,''));
+  if(!Array.isArray(board?.nodes))return null;
+  let count=0;
+  for(const node of board.nodes){
+    if(node?.type!=='file'||typeof node.file!=='string')continue;
+    const normalized=node.file.replaceAll('\\','/').replace(/^\/+/,'');
+    if(!normalized)continue;
+    const resolved=path.resolve(root,normalized);
+    if(!within(root,resolved)||resolved===root)continue;
+    const next=move(resolved);
+    if(next!==resolved){
+      node.file=slash(path.relative(root,next));
+      count++;
+    }
+  }
+  if(!count)return {text,count:0};
+  const bom=text.startsWith('\uFEFF')?'\uFEFF':'';
+  const newline=text.includes('\r\n')?'\r\n':'\n';
+  const saved=bom+(JSON.stringify(board,null,2)+'\n').replaceAll('\n',newline);
+  return {text:saved,count};
+}
+
+/**
+ * @param {VaultIndex} index
+ * @param {(file: string) => string} move
+ * @param {string[]} canvases
+ * @param {Draft[]} drafts
+ * @param {(path: string) => Promise<{text: string, mtime: number}|null>} read
+ */
+export async function planCanvasLinkRefactor(index,move,canvases,drafts,read) {
+  const {path,key,within,root}=index;
+  const draftByPath=new Map(drafts.map(draft=>[key(draft.path),draft]));
+  const changes=[];
+  let references=0,notes=0;
+  for(const file of canvases){
+    let disk;
+    try{disk=await read(file);}
+    catch{continue;}
+    if(!disk)continue;
+    const {text,mtime}=disk;
+    let result;
+    try{result=rewriteCanvasLinks(text,root,move,path,within);}
+    catch{continue;}
+    if(!result)continue;
+    const dest=move(file);
+    const draft=draftByPath.get(key(file));
+    let edited=null;
+    if(draft){
+      try{edited=rewriteCanvasLinks(draft.text,root,move,path,within);}
+      catch{edited=null;}
+    }
+    if(result.text===text&&dest===file&&(!edited||edited.text===draft.text))continue;
+    if(draft?.saved!==undefined&&normalizeLineEndings(file,draft.saved)!==normalizeLineEndings(file,text))
+      throw Error(tr("linkRefactor.thisNoteChangedElsewhereResolveTheConflict")+path.basename(file));
+    const count=Math.max(result.count,edited?.count||0);
+    if(count){references+=count;notes++;}
+    changes.push({from:file,path:dest,previous:text,saved:result.text,
+      mtime,count:result.count,draft:edited?.text});
+  }
+  return {changes,refactor:{notes,references}};
 }
 
 /** @param {string} text @param {{from: number, destination: string}} reference @param {string} identifier */
@@ -112,7 +189,7 @@ export function replaceReference(text,reference,identifier) {
     }
     return destination;
   });
-  if(!replaced)throw Error('这处引用已变化，请刷新体检后重试。');
+  if(!replaced)throw Error(tr("linkRefactor.thisLinkChangedRefreshTheVaultCheck"));
   return next;
 }
 

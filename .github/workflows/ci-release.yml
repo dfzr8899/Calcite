@@ -52,7 +52,6 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if ('${{ matrix.target }}' -eq 'windows') {
-            $env:CSC_LINK = ''
             npm run package -- --installer-only
           } else {
             npm run package -- --platform=${{ matrix.target }} --installer-only
@@ -127,6 +126,9 @@ jobs:
             bash android/gradlew -p android :app:assembleRelease
             apk=Calcite-Android.apk
             cp android/app/build/outputs/apk/release/app-release.apk "release/ci/$apk"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is required for tagged Android releases." >&2
+            exit 1
           else
             bash android/gradlew -p android :app:assembleDebug
             apk=Calcite-Android-debug.apk

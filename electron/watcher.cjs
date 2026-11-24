@@ -3,6 +3,7 @@ const path = require('node:path');
 const { watch } = require('chokidar');
 const { within, key } = require('./workspace.cjs');
 const { documentType } = require('./ipc-schema.cjs');
+const { imageExtension } = require('../shared/markdown-images.mjs');
 
 const excluded = new Set(['node_modules','dist','release']);
 function tracked(root, file) {
@@ -28,13 +29,13 @@ async function entry(root, file) {
   }
 }
 
-function watchVault(root, onBatch, onError) {
+function watchVault(root, onBatch, onError, onAssetChange=()=>{}) {
   const pending = new Map();
-  let stopped = false, timer;
+  let stopped = false, timer, assetTimer;
   const watcher = watch(root,{
     ignoreInitial:true, followSymlinks:false, atomic:100,
     awaitWriteFinish:{stabilityThreshold:120,pollInterval:30},
-    ignored:(file,stat)=>!tracked(root,file)||Boolean(stat&&(stat.isSymbolicLink()||stat.isFile()&&!documentType.test(file)))
+    ignored:(file,stat)=>!tracked(root,file)||Boolean(stat&&(stat.isSymbolicLink()||stat.isFile()&&!documentType.test(file)&&!imageExtension.test(file)))
   });
   let finish;
   const ready = new Promise(resolve=>{
@@ -45,7 +46,14 @@ function watchVault(root, onBatch, onError) {
   watcher.on('error',error=>{if (!stopped) onError(error);});
   watcher.on('all',(type,file)=>{
     if (stopped || !tracked(root,file) || !['add','change','unlink','addDir','unlinkDir'].includes(type)) return;
-    if (!type.endsWith('Dir') && !documentType.test(file)) return;
+    if (!type.endsWith('Dir') && !documentType.test(file)) {
+      if (imageExtension.test(file)) {
+        clearTimeout(assetTimer);
+        assetTimer=setTimeout(()=>{if(!stopped)onAssetChange();},200);
+        assetTimer.unref?.();
+      }
+      return;
+    }
     const id=key(file);
     const previous=pending.get(id);
     if (!(previous?.type==='add' && type==='change')) pending.set(id,{type,path:file});
@@ -56,7 +64,7 @@ function watchVault(root, onBatch, onError) {
       if (!stopped) onBatch(changes);
     },85);
   });
-  return {ready,async close(){stopped=true;clearTimeout(timer);pending.clear();finish();await watcher.close();}};
+  return {ready,async close(){stopped=true;clearTimeout(timer);clearTimeout(assetTimer);pending.clear();finish();await watcher.close();}};
 }
 
 module.exports={entry,tracked,watchVault};

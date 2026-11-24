@@ -8,14 +8,14 @@ import {normalizeLineEndings} from '../../shared/text-files.mjs';
 
 const source=name=>fs.readFile(new URL('../../'+name,import.meta.url),'utf8');
 
-test('release identity is 1.0.0 and workspace/build artifacts are ignored at every depth',async t=>{
+test('release identity is 1.1.0 and workspace/build artifacts are ignored at every depth',async t=>{
   const [manifest,lock,android,ios,ignore]=await Promise.all(
     ['package.json','package-lock.json','android/app/build.gradle','ios/App/App.xcodeproj/project.pbxproj','.gitignore'].map(source)
   );
-  assert.equal(JSON.parse(manifest).version,'1.0.0');
-  assert.equal(JSON.parse(lock).packages[''].version,'1.0.0');
-  assert.deepEqual([...android.matchAll(/versionName\s+"([^"]+)"/g)].map(match=>match[1]),['1.0.0']);
-  assert.deepEqual([...ios.matchAll(/MARKETING_VERSION\s*=\s*([^;]+);/g)].map(match=>match[1]),['1.0.0','1.0.0']);
+  assert.equal(JSON.parse(manifest).version,'1.1.0');
+  assert.equal(JSON.parse(lock).packages[''].version,'1.1.0');
+  assert.deepEqual([...android.matchAll(/versionName\s+"([^"]+)"/g)].map(match=>match[1]),['1.1.0']);
+  assert.deepEqual([...ios.matchAll(/MARKETING_VERSION\s*=\s*([^;]+);/g)].map(match=>match[1]),['1.1.0','1.1.0']);
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'calcite-ignore-'));
   t.after(()=>fs.rm(dir,{recursive:true,force:true}));
   await git.init({fs,dir});

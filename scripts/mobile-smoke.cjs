@@ -120,13 +120,16 @@ async function gitSmoke() {
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aFzoAAAAASUVORK5CYII=';
 
 function registerNativeMock(factory,seed,options={}) {
+  if(!options.useSystemLanguage)localStorage.setItem('calcite.language','zh-CN');
   const filesystem=factory(seed);
   const prefs=new Map(Object.entries(options.prefs||{}).map(([key,value])=>[key,JSON.stringify(value)]));
   const outputs=[];
   const fixture={head:null,objects:[],written:0,waiting:false,requests:[]};
-  let pendingExternalFile=options.externalFile, externalListener;
+  const pendingExternalFiles=options.externalFile?[options.externalFile]:[];
+  let externalListener, appStateListener;
+  fixture.appState=isActive=>appStateListener?.({isActive});
   fixture.deliverExternalFile=file=>{
-    pendingExternalFile=file;
+    pendingExternalFiles.push(file);
     externalListener?.({});
   };
   const rename=filesystem.rename;
@@ -139,6 +142,22 @@ function registerNativeMock(factory,seed,options={}) {
   };
   const mock={
     Filesystem:filesystem,
+    CalciteAtomicFiles:{
+      async rename({from,to,exclusive,temporary}){
+        const key='DATA:'+to.replace(/^\//,'');
+        if(exclusive){
+          if(filesystem.store.has(key))throw Object.assign(Error('Destination already exists'),{code:'EEXIST'});
+          if(temporary)fixture.exclusiveImports=(fixture.exclusiveImports||0)+1;
+          filesystem.store.set(key,filesystem.store.get('DATA:'+from.replace(/^\//,'')));
+          return;
+        }
+        return filesystem.rename({from,to,directory:'DATA'});
+      },
+      async sameFile({from,to}){
+        return {same:filesystem.store.get('DATA:'+from.replace(/^\//,''))===filesystem.store.get('DATA:'+to.replace(/^\//,''))};
+      },
+      async flushDirectory(){}
+    },
     Preferences:{async get({key}){
       if(options.holdGit&&key.startsWith('git:')&&!fixture.gitReleased)
         await new Promise(resolve=>{fixture.releaseGit=()=>{fixture.gitReleased=true;resolve();};});
@@ -169,10 +188,8 @@ function registerNativeMock(factory,seed,options={}) {
     Clipboard:{async write(value){outputs.push(value);},async read(){return {value:''};}},
     Share:{async canShare(){return {value:true};},async share(data){outputs.push(data);}},
     CalciteRichClipboard:{async write(data){outputs.push(data);},async readImage(){return fixture.clipboardImage||{};}},
-    CalciteExternalFiles:{async consumePendingExternalFile(){
-      const file=pendingExternalFile;
-      pendingExternalFile=null;
-      return file||{};
+    CalciteExternalFiles:{async setLocale({locale}){fixture.locale=locale;},async consumePendingExternalFile(){
+      return pendingExternalFiles.shift()||{};
     }},
     CalciteDocumentPrint:{async pdf(data){outputs.push({...data,print:true});}}
   };
@@ -186,6 +203,7 @@ function registerNativeMock(factory,seed,options={}) {
     nativeCallback:(name,method,options,listener)=>{
       if(name==='CalciteExternalFiles'&&method==='addListener'&&options.eventName==='externalFileAvailable')
         externalListener=listener;
+      if(name==='App'&&method==='addListener'&&options.eventName==='appStateChange')appStateListener=listener;
       return 1;
     },
     convertFileSrc:uri=>location.origin+'/_capacitor_file_/'+uri.replace(/^file:\/\/\//,'')
@@ -272,6 +290,8 @@ async function externalFileSmoke(browser,url) {
     await page.waitForFunction(()=>calciteTest.outputs.some(row=>row.print&&row.title==='v1.0.notes'));
     await preview.getByRole('button',{name:'导出长图'}).tap();
     await page.waitForFunction(()=>calciteTest.outputs.some(row=>row.files?.some(file=>file.endsWith('.png'))));
+    await preview.getByRole('button',{name:'HTML',exact:true}).tap();
+    await page.waitForFunction(()=>calciteTest.outputs.some(row=>row.files?.some(file=>file.endsWith('.html'))));
     assert.deepEqual(await documents(),['DATA:'+original]);
 
     await preview.getByRole('button',{name:'导入到当前知识库'}).tap();
@@ -283,9 +303,15 @@ async function externalFileSmoke(browser,url) {
     assert.equal(imported['DATA:'+original],encode('# 原有笔记\n'));
     assert.equal(imported['DATA:'+vault+'/v1.0.notes (1).md'],encode(options.externalFile.text.replaceAll('\r\n','\n')));
 
+    assert.equal(await page.evaluate(()=>calciteTest.fixture.exclusiveImports),1);
     const deliver=file=>page.evaluate(file=>calciteTest.fixture.deliverExternalFile(file),file);
-    await deliver({name:'另一份.markdown',text:'# 热启动文件'});
+    await page.evaluate(()=>{
+      calciteTest.fixture.deliverExternalFile({name:'另一份.markdown',text:'# 热启动文件'});
+      calciteTest.fixture.deliverExternalFile({name:'排队.MD',text:'# 排队文件'});
+    });
     await preview.getByRole('heading',{name:'热启动文件',exact:true}).waitFor();
+    await preview.getByRole('button',{name:'关闭外部预览'}).tap();
+    await preview.getByRole('heading',{name:'排队文件',exact:true}).waitFor();
     await preview.getByRole('button',{name:'关闭外部预览'}).tap();
     await preview.waitFor({state:'hidden'});
     await page.locator('#document-name').filter({hasText:'v1.0.notes (1).md'}).waitFor({state:'attached'});
@@ -380,9 +406,10 @@ async function uiSmoke() {
       assert(await sheet.evaluate(node=>node.parentElement===document.body));
       const sheetFilter=await sheet.evaluate(node=>getComputedStyle(node).backdropFilter);
       assert.equal(sheetFilter,glass==='solid'?'none':'blur(16px) saturate(1.5)');
+      await page.setViewportSize({width:360,height:780});
       await tap('大纲与反链');
-      await drawers.locator('.outline-panel').waitFor();
-      await closeDrawer();
+      await assertOutlineSheet(page,{outline:'大纲',backlinks:'反链',filter:'筛选标题',close:'关闭大纲与反链'});
+      await page.setViewportSize({width:390,height:844});
     }
     await page.evaluate(()=>calciteAppearance.set('glass','liquid'));
     await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
@@ -425,7 +452,7 @@ async function uiSmoke() {
     await page.locator('#reading').getByText('内层正文').waitFor({state:'hidden'});
     await drawers.getByRole('button',{name:'折叠或展开 第二级',exact:true}).tap();
     await drawers.getByRole('button',{name:'第三级',exact:true}).waitFor();
-    await tap('收起右侧栏');
+    await tap('关闭大纲与反链');
     await page.locator('#mobile-drawers[data-open]').waitFor({state:'detached'});
     await tap('切换到编辑');
     const editor=page.locator('#source-editor .cm-content');
@@ -470,6 +497,7 @@ async function uiSmoke() {
         return input.classList.contains('lg-switch')&&css.appearance==='none'&&css.width==='40px'&&css.height==='22px';
       })));
       if(label==='写作'){
+        await assertLanguageCard(settings);
         const macro=settings.locator('[name=macroInput]');
         await macro.scrollIntoViewIfNeeded();
         const after=await macro.boundingBox(),footer=await settings.locator('.lg-footer').boundingBox();
@@ -848,4 +876,92 @@ async function uiSmoke() {
 if(require.main===module)(async()=>{await gitSmoke();if(!process.argv.includes('--git-only'))await uiSmoke();})()
   .catch(error=>{console.error(error);process.exitCode=1;});
 
-module.exports={memoryFilesystem,registerNativeMock,serveDist,chromiumOptions};
+async function assertLanguageCard(settings) {
+  const language=settings.locator('select[name=language]');
+  await language.waitFor();
+  for(const theme of ['light','dark']){
+    assert(await language.evaluate((select,theme)=>{
+      const root=document.documentElement,previous=root.dataset.theme;
+      try{
+        root.dataset.theme=theme;
+        const image=select.closest('form').elements.attachmentStrategy;
+        const card=select.closest('.lg-group'),other=image.closest('.lg-group');
+        const rect=select.getBoundingClientRect(),bounds=card.getBoundingClientRect(),label=select.parentElement.getBoundingClientRect();
+        const css=getComputedStyle(select),reference=getComputedStyle(image);
+        return card.closest('.lg-settings-scroll')&&rect.left>12&&Math.abs(rect.width-label.width)<1&&
+          Math.abs(bounds.left-other.getBoundingClientRect().left)<1&&css.boxSizing==='border-box'&&
+          ['height','fontSize','paddingInline','borderRadius','appearance','backgroundImage'].every(key=>css[key]===reference[key]);
+      }finally{root.dataset.theme=previous;}
+    },theme));
+  }
+}
+
+async function assertOutlineSheet(page,{outline,backlinks,filter,close,scrolls=false}) {
+  const panel=page.locator('#mobile-drawers[data-open="right"] #right-sidebar');
+  await panel.waitFor();
+  const tabs=panel.getByRole('tablist');
+  await tabs.getByRole('tab',{name:outline,exact:true}).tap();
+  const search=panel.getByRole('searchbox',{name:filter});
+  const list=panel.locator('#outline');
+  const first=list.locator('.outline-row').first();
+  await first.waitFor();
+  const closeButton=panel.getByRole('button',{name:close,exact:true});
+  assert.equal(await panel.locator('[data-desktop-inspector-toggle], .lucide-panel-right-close').count(),0);
+  assert.equal(await closeButton.locator('.lucide-x').count(),1);
+  assert.equal(await panel.locator('.mobile-inspector-handle').isVisible(),true);
+  const closeSize=await closeButton.boundingBox();
+  assert.deepEqual([closeSize.width,closeSize.height],[40,40]);
+  const geometry=await panel.evaluate(node=>{
+    const bounds=node.getBoundingClientRect();
+    const search=node.querySelector('.outline-search').getBoundingClientRect();
+    const list=node.querySelector('#outline').getBoundingClientRect();
+    const first=node.querySelector('.outline-row').getBoundingClientRect();
+    const css=getComputedStyle(node);
+    return {width:bounds.width/innerWidth,height:bounds.height/innerHeight,left:bounds.left,
+      bottom:bounds.bottom-innerHeight,viewport:innerWidth,position:css.position,transform:css.transform,
+      radius:css.borderTopLeftRadius,bottomRadius:css.borderBottomLeftRadius,
+      safeBottom:parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom'))||0,
+      bottomPadding:parseFloat(css.paddingBottom),
+      searchBottom:search.bottom,listTop:list.top,firstTop:first.top,firstBottom:first.bottom,listBottom:list.bottom};
+  });
+  assert.equal(geometry.viewport,360);
+  assert(geometry.width>=.95&&geometry.width<=1&&geometry.left>=0&&geometry.left<=8,JSON.stringify(geometry));
+  assert(geometry.height>=.70&&geometry.height<=.78,JSON.stringify(geometry));
+  assert(Math.abs(geometry.bottom)<=1,JSON.stringify(geometry));
+  assert.equal(geometry.position,'fixed');
+  assert.equal(geometry.transform,'none');
+  assert.equal(geometry.radius,'20px');
+  assert.equal(geometry.bottomRadius,'0px');
+  assert(geometry.bottomPadding>=geometry.safeBottom+8,JSON.stringify(geometry));
+  assert.equal(await list.evaluate(node=>getComputedStyle(node).overflowY),'auto');
+  if(scrolls)assert(await list.evaluate(node=>node.scrollHeight>node.clientHeight));
+  assert(geometry.searchBottom<=geometry.listTop&&geometry.listTop+7<=geometry.firstTop&&
+    geometry.firstBottom<=geometry.listBottom,JSON.stringify(geometry));
+  const title=await first.locator('.outline-item').textContent();
+  await search.fill(title);
+  await first.locator('.outline-item').getByText(title,{exact:true}).waitFor();
+  await search.fill('');
+  const deepest=list.locator('.outline-row[data-level="6"] .outline-item span').first();
+  if(await deepest.count()){
+    assert(await deepest.evaluate(node=>{
+      const style=getComputedStyle(node);
+      return style.whiteSpace==='normal'&&node.scrollWidth<=node.clientWidth+1&&
+        parseFloat(getComputedStyle(node.closest('.outline-row')).paddingInlineStart)<=53;
+    }));
+  }
+  const linkTab=tabs.getByRole('tab',{name:new RegExp('^'+backlinks+' \\(\\d+\\)$')});
+  await linkTab.tap();
+  await panel.locator('#backlinks-view').waitFor();
+  assert.equal(await search.isHidden(),true);
+  assert(await linkTab.evaluate(node=>{
+    const range=document.createRange();
+    range.selectNodeContents(node);
+    const text=range.getBoundingClientRect(),button=node.getBoundingClientRect();
+    return text.left>=button.left&&text.right<=button.right&&getComputedStyle(node).textOverflow==='clip';
+  }));
+  await tabs.getByRole('tab',{name:outline,exact:true}).tap();
+  await closeButton.tap();
+  await panel.waitFor({state:'hidden'});
+}
+
+module.exports={memoryFilesystem,registerNativeMock,serveDist,chromiumOptions,assertLanguageCard,assertOutlineSheet};

@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 
 import { properties } from './note-metadata.js';
 export { splitFrontmatter, noteTags } from './note-metadata.js';
@@ -11,7 +12,7 @@ import {$nodeSchema,$remark} from '@milkdown/kit/utils';
 export const pagebreakNode=$nodeSchema('calcitePagebreak',()=>({
   group:'block',
   atom:true,
-  toDOM:()=>['hr',{class:'note-pagebreak','aria-label':'分页'}],
+  toDOM:()=>['hr',{class:'note-pagebreak','aria-label':tr("noteRender.pageBreak")}],
   parseDOM:[{tag:'hr.note-pagebreak'}],
   parseMarkdown:{
     match:node=>node.type==='calcitePagebreak',
@@ -43,7 +44,7 @@ export const defaults = {
   workspaceAttachments: 'assets',
   noteAttachments: './${filename}.assets',
   newNoteDirectory: '',
-  templateDirectory: '模板',
+  templateDirectory: tr("notes.template"),
   dailyDirectory: 'Daily',
   dailyFilePattern: 'YYYY-MM-DD',
   dailyTemplate: '',
@@ -58,7 +59,7 @@ export function propertiesCard(yaml) {
   const card = document.createElement('section');
   card.className = 'note-properties';
   const title = document.createElement('strong');
-  title.textContent = '属性';
+  title.textContent = tr("notes.properties");
   card.append(title);
   const values = properties(yaml);
   if (!values) {
@@ -85,18 +86,19 @@ export function propertiesCard(yaml) {
   return card;
 }
 
-const callouts = {
-  note:['✎','提示'], info:['ⓘ','信息'], tip:['◆','技巧'], warning:['⚠','警告'],
-  caution:['⚠','注意'], danger:['⛔','危险'], important:['!','重要'], example:['◇','示例'],
-  question:['?','问题'], quote:['❝','引用'], abstract:['≡','摘要'], todo:['□','待办'],
-  success:['✓','成功'], failure:['×','失败'], bug:['⚑','缺陷']
-};
+const calloutLabels = () => ({
+  note:['✎',tr("notes.note")], info:['ⓘ',tr("notes.info")], tip:['◆',tr("notes.tip")], warning:['⚠',tr("notes.warning")],
+  caution:['⚠',tr("notes.caution")], danger:['⛔',tr("notes.danger")], important:['!',tr("notes.important")], example:['◇',tr("notes.example")],
+  question:['?',tr("notes.question")], quote:['❝',tr("notes.quote")], abstract:['≡',tr("notes.summary")], todo:['□',tr("notes.task")],
+  success:['✓',tr("notes.success")], failure:['×',tr("notes.failure")], bug:['⚑',tr("notes.bug")]
+});
 const calloutMarker = /^\[!([\w-]+)\]([+-])?[ \t]*([^\r\n]*)/i;
 function calloutData(text) {
   const match = calloutMarker.exec(text);
   if (!match) return null;
   const type = match[1].toLowerCase();
-  const [icon,label] = callouts[type] || callouts.note;
+  const labels = calloutLabels();
+  const [icon,label] = labels[type] || labels.note;
   return { type, icon, title:match[3].trim() || label, fold:match[2], marker:match[0] };
 }
 export function styleCallouts(container) {
@@ -167,7 +169,7 @@ export function liveNotesPlugin(renderEmbed) {
                 'data-wiki':destination,
                 ...(links.has(destination)?{'data-link-status':links.get(destination)}:{}),
                 ...(!editing&&alias&&!match[1]?{'data-wiki-alias':alias}:{}),
-                title:'悬停预览 · Ctrl + 点击打开'
+                title:tr("notes.hoverToPreviewCtrlClickToOpen")
               }));
               if(match[1]&&renderEmbed&&embedCount++<48)decorations.push(Decoration.widget(to,()=>{
                 const host=document.createElement('span');
@@ -260,6 +262,42 @@ function lineDiff(before, after) {
   }
   return rows;
 }
+export function sideBySideDiff(parent,before,after,labels) {
+  const table=document.createElement('table');
+  table.className='external-versions';
+  const heading=table.createTHead().insertRow();
+  for(const label of labels){
+    const th=document.createElement('th');
+    th.scope='col';
+    th.textContent=label;
+    heading.append(th);
+  }
+  const body=table.createTBody();
+  const lines=lineDiff(before,after);
+  function render(left,right) {
+    const row=body.insertRow();
+    for(const line of [left,right]){
+      const cell=row.insertCell();
+      if(!line)continue;
+      cell.textContent=line.text;
+      if(line.kind!=='same')cell.className='diff-'+line.kind;
+    }
+  }
+  for(let i=0;i<lines.length;){
+    if(lines[i].kind==='same'){
+      render(lines[i],lines[i]);
+      i++;
+      continue;
+    }
+    const removed=[],added=[];
+    while(i<lines.length&&lines[i].kind!=='same'){
+      (lines[i].kind==='removed'?removed:added).push(lines[i++]);
+    }
+    for(let n=0;n<Math.max(removed.length,added.length);n++)render(removed[n],added[n]);
+  }
+  parent.append(table);
+}
+
 export function diffView(parent, before, after) {
   const rows = lineDiff(before,after);
   const ranges = [];

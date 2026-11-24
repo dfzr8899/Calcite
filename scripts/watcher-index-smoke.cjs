@@ -74,9 +74,8 @@ async function verifyWatcher(scratch) {
     await notice.getByRole('button',{name:'查看差异'}).click();
     await page.locator('.history-dialog[open]').getByText('外部修改冲突',{exact:true}).waitFor();
     await page.getByRole('button',{name:'关闭版本历史'}).click();
-    await notice.getByRole('button',{name:'保留当前草稿'}).click();
-    await notice.waitFor({state:'hidden'});
-    await page.waitForFunction(()=>document.querySelector('#save-state').textContent.includes('待手动保存'));
+    await page.keyboard.press('Control+s');
+    await notice.waitFor();
     await new Promise(resolve=>setTimeout(resolve,1200));
     assert.equal(await fs.readFile(file,'utf8'),content('磁盘冲突稿'));
     assert(await editor.getByText('待保留草稿',{exact:false}).isVisible());
@@ -84,8 +83,8 @@ async function verifyWatcher(scratch) {
     assert.equal(delta.full,false);
     assert.deepEqual(delta.notes.map(note=>note.path),[file]);
     assert.equal(delta.notes[0].text,content('磁盘冲突稿'));
-    await editor.focus();
-    await page.keyboard.press('Control+s');
+    await notice.getByRole('button',{name:'保留我的修改并覆盖'}).click();
+    await notice.waitFor({state:'hidden'});
     await page.waitForFunction(()=>document.querySelector('#save-state').textContent==='已保存到本地');
     const owned=await invoke('search-index',delta.cursor);
     assert(owned.notes.some(note=>note.text.includes('待保留草稿')));
@@ -94,7 +93,7 @@ async function verifyWatcher(scratch) {
     assert.equal(events.filter(change=>change.type==='change').length,1,'internal write never becomes an external change');
     await append('下一份草稿');
     await fs.writeFile(file,content('采用磁盘稿'));
-    await notice.getByRole('button',{name:'加载磁盘版本'}).click();
+    await notice.getByRole('button',{name:'加载磁盘新版'}).click();
     await notice.waitFor({state:'hidden'});
     await page.waitForFunction(()=>document.querySelector('#save-state').textContent==='已保存到本地');
     await fs.unlink(file);

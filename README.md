@@ -4,7 +4,7 @@ English · [简体中文](README_CN.md)
 
 **Connect your notes. Keep them as Markdown files.**
 
-![Version v1.0.0](https://img.shields.io/badge/version-v1.0.0-blue) [![MIT license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![JavaScript](https://img.shields.io/badge/language-JavaScript-yellow)
+![Version v1.1.0](https://img.shields.io/badge/version-v1.1.0-blue) [![MIT license](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![JavaScript](https://img.shields.io/badge/language-JavaScript-yellow)
 
 Calcite is a local-first Markdown workspace for Windows and Android. It’s for people who keep research, study notes, or project documentation in folders and want to link and read those notes across devices. No Calcite account or subscription is required.
 

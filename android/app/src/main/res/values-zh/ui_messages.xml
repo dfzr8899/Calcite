@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="no_printable">没有可打印的文档。</string>
+    <string name="print_busy">请先关闭当前打印任务。</string>
+    <string name="print_unavailable">系统打印服务不可用。</string>
+    <string name="print_failed">无法启动系统 PDF 打印。</string>
+    <string name="print_title">Calcite · 导出 PDF</string>
+    <string name="external_unrecognized">无法识别外部文件。</string>
+    <string name="external_select">请分享一个 Markdown 文件。</string>
+    <string name="external_permission">没有权限读取外部文件，请从原应用重新打开或分享。</string>
+    <string name="external_scheme">请从系统文件管理器或分享菜单打开 Markdown 文件。</string>
+    <string name="external_revoked">外部文件已不可读或没有读取权限，请从原应用重新分享。</string>
+    <string name="external_retry">无法读取外部文件，请从原应用重新分享。</string>
+    <string name="external_read">无法读取外部文件。</string>
+    <string name="external_limit">外部文件超过 10 MiB。</string>
+    <string name="external_utf8">外部文件不是有效的 UTF-8 文本，无法预览。</string>
+    <string name="external_binary">外部文件包含二进制内容，无法预览。</string>
+    <string name="external_empty">外部文件为空。</string>
+    <string name="external_untitled">未命名文档.md</string>
+    <string name="clipboard_limit">剪贴板图片超过 32 MiB。</string>
+    <string name="clipboard_empty">剪贴板图片为空。</string>
+    <string name="clipboard_read">无法读取剪贴板图片。</string>
+    <string name="clipboard_missing">缺少剪贴板内容。</string>
+    <string name="legacy_git_invalid">Git 请求参数无效。</string>
+    <string name="legacy_git_failed">旧版 Android 的 Git 请求失败，请检查网络或仓库地址。</string>
+    <string name="secure_unavailable">系统密钥不可用。</string>
+    <string name="secure_save_failed">无法保存系统密钥。</string>
+    <string name="external_queue_full">待预览文件过多，请关闭部分预览后重新发送。</string>
+</resources>

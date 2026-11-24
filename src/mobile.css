@@ -16,7 +16,6 @@
   --lg-chrome:var(--surface-tools-solid);
   --lg-float:var(--surface-float-solid);
   --sidebar-width:min(352px,88vw);
-  --outline-width:min(100%,560px);
   --text-heading:var(--text-primary);
   --accent-soft:var(--lg-accent-soft);
   --focus-border:var(--accent);
@@ -127,13 +126,39 @@
 }
 [data-platform="mobile"] #mobile-drawers .sidebar:not([data-pane-view="files"]) { padding-bottom:var(--safe-bottom); }
 [data-platform="mobile"] #mobile-drawers .outline-panel {
-  inset: auto 0 0;margin-inline:auto;height:min(70dvh,640px);
-  padding:8px max(12px,var(--safe-right)) max(12px,var(--safe-bottom)) max(12px,var(--safe-left));
-  border-radius:22px 22px 0 0;transform:translateY(106%);
+  /* Desktop width variables can still be inherited from body at narrow breakpoints. */
+  position:fixed;inset:auto 0 0;margin:0;width:100%;max-width:100%;flex:none;
+  height:75dvh;max-height:calc(var(--lg-available-height,100dvh) - var(--safe-top) - 48px);
+  padding:0 max(12px,var(--safe-right)) calc(12px + var(--safe-bottom)) max(12px,var(--safe-left));
+  overflow:hidden;border-radius:20px 20px 0 0;transform:translateY(100%);
 }
-[data-platform="mobile"] #mobile-drawers[data-open="left"] .sidebar,
-[data-platform="mobile"] #mobile-drawers[data-open="right"] .outline-panel {
+[data-platform="mobile"] #mobile-drawers[data-open="left"] .sidebar {
   pointer-events:auto;visibility:visible;transform:translate(0);
+}
+[data-platform="mobile"] #mobile-drawers[data-open="right"] .outline-panel {
+  pointer-events:auto;visibility:visible;transform:none;
+}
+[data-platform="mobile"] .mobile-inspector-handle {
+  display:grid;place-items:center;flex:0 0 18px;touch-action:none;
+}
+[data-platform="mobile"] .mobile-inspector-handle::before {
+  content:'';width:36px;height:4px;border-radius:999px;background:var(--placeholder);
+}
+[data-platform="mobile"] .outline-panel .inspector-header { gap:8px;padding:0 2px 8px; }
+[data-platform="mobile"] .outline-panel .mobile-inspector-close {
+  display:grid;place-items:center;flex:0 0 40px;width:40px;height:40px;border-radius:50%;
+}
+[data-platform="mobile"] .outline-panel .mobile-inspector-close svg { width:18px;height:18px; }
+[data-platform="mobile"] .outline-panel .outline-search { flex:none;min-height:40px;margin:0 2px; }
+[data-platform="mobile"] .outline-panel .outline-search input { width:auto;min-width:0;font-size:14px; }
+[data-platform="mobile"] .outline-panel :is(#outline,#backlinks) {
+  flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-top:8px;
+}
+[data-platform="mobile"] .outline-panel .outline-row {
+  --outline-step:12px;--indent:min(48px,calc((var(--level) - 1) * var(--outline-step)));
+}
+[data-platform="mobile"] .outline-panel .outline-item span {
+  white-space:normal;overflow-wrap:anywhere;line-height:1.45;
 }
 [data-platform="mobile"] .mobile-shade {
   position:absolute;inset:0;width:100%;height:100%;padding:0;border:0;border-radius:0;
@@ -337,6 +362,10 @@
   flex-direction:column;justify-content:center;gap:6px;min-height:68px;padding:5px 2px;font-size:11px;text-align:center;
 }
 [data-platform="mobile"] .lg-menu-group[data-layout="tiles"] button span { flex:none; }
+[data-platform="mobile"]:lang(en-US) .lg-menu-group[data-layout="tiles"] button {
+  min-width:0;padding-inline:2px;font-size:12px;white-space:nowrap;
+}
+[data-platform="mobile"]:lang(en-US) .settings-layout nav button { font-size:13px; }
 [data-platform="mobile"] .lg-menu-group[data-layout="tiles"] svg { width:21px;height:21px; }
 [data-platform="mobile"] .lg-menu-group[data-layout="danger"] button { justify-content:center;color:var(--lg-danger); }
 [data-platform="mobile"] .lg-menu-group[data-layout="danger"] button span { flex:none; }
@@ -363,7 +392,7 @@
 [data-platform="mobile"] .lg-detail-content label { padding:10px 0;margin:0; }
 [data-platform="mobile"] .lg-group > label:not(:last-child) { border-bottom:1px solid var(--separator); }
 [data-platform="mobile"] .lg-group .lg-switch-row { padding-block:4px; }
-[data-platform="mobile"] .lg-group > :is(label,div) :is(input:not([type=checkbox]),select,textarea) { width:100%; }
+[data-platform="mobile"] .lg-group > :is(label,div) :is(input:not([type=checkbox]),select,textarea) { width:100%;box-sizing:border-box; }
 [data-platform="mobile"] .lg-group .lg-choice { padding-inline:6px; }
 [data-platform="mobile"] .lg-details > summary { cursor:pointer;min-height:48px;padding-block:14px;font-weight:650; }
 [data-platform="mobile"] .lg-detail-content { border-top:1px solid var(--separator);padding-bottom:10px; }

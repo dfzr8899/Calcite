@@ -1,8 +1,8 @@
+import {getLocale, t as tr} from "../shared/i18n/index.mjs";
+import {errorMessage} from './error-message.js';
 import {showDialog,settingToggle} from './mobile-ui.js';
-export const exportDefaults={paper:'A4',landscape:false,vertical:.5,horizontal:.55,scale:100,theme:'modern',fontSize:16,
-  lineHeight:1.75,wrapCode:true,keepBlocks:true,toc:false,includeProperties:true,chapters:false,outline:true,
-  numberEquations:false,hideFirst:false,headerLeft:'',headerCenter:'',headerRight:'',footerLeft:'',footerCenter:'',footerRight:'',
-  printCSS:'',pngScale:1,pngWidth:760,pngPadding:32,pngTheme:'light'};
+import {exportDefaults} from './export-defaults.js';
+export {exportDefaults};
 export const paperInches={A4:[8.27,11.69],A5:[5.83,8.27],B5:[6.93,9.84],Letter:[8.5,11]};
 const themes={
   modern:['#fff','#1d2330','#f1f4f8','#c9d3e2','#264b98','system-ui, sans-serif'],
@@ -33,8 +33,8 @@ export function exportStyle(options,format) {
 export function organizeExport(div,options) {
   if(!options.includeProperties) div.querySelectorAll('.note-properties').forEach(node=>node.remove());
   if(!options.toc)return;
-  const nav=document.createElement('nav');nav.className='note-toc';nav.setAttribute('aria-label','导出目录');
-  const title=document.createElement('strong');title.textContent='目录';
+  const nav=document.createElement('nav');nav.className='note-toc';nav.setAttribute('aria-label',tr("exportCenter.exportedContents"));
+  const title=document.createElement('strong');title.textContent=tr("exportCenter.contents");
   const list=document.createElement('ul');
   for(const [i,heading] of [...div.querySelectorAll('h1,h2,h3,h4,h5,h6')].entries()) {
     heading.id||='export-heading-'+i;
@@ -46,7 +46,7 @@ export function organizeExport(div,options) {
 }
 
 export function htmlDocument(title,body,css,remote=false) {
-  return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+
+  return '<!doctype html><html lang="'+getLocale()+'"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:'+ (remote?' https: http:':'') +
     '; font-src data:; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'">'+
     '<title>'+htmlSafe(title)+'</title><style>'+css+'</style><body>'+body+'</body></html>';
@@ -94,34 +94,34 @@ export function showExportCenter({initial,formats=['pdf','html','png'],preferenc
   const group=(label,attrs='')=>`<section class="lg-group" ${attrs}><h4>${label}</h4>`;
   const endGroup='</section>';
   const dialog=document.createElement('dialog');dialog.className='feature-dialog export-center';
-  dialog.innerHTML=`<header><h2>导出中心</h2><form method="dialog"><button aria-label="关闭导出中心">×</button></form></header>
-  <div class="mobile-export-tabs" role="tablist" aria-label="导出中心视图">
-    <button type="button" role="tab" aria-selected="true" data-panel="parameters">参数设置</button>
-    <button type="button" role="tab" aria-selected="false" data-panel="preview">实时预览</button>
+  dialog.innerHTML=`<header><h2>${tr("exportCenter.exportCenter")}</h2><form method="dialog"><button aria-label="${tr("exportCenter.closeExportCenter")}">×</button></form></header>
+  <div class="mobile-export-tabs" role="tablist" aria-label="${tr("exportCenter.exportCenterView")}">
+    <button type="button" role="tab" aria-selected="true" data-panel="parameters">${tr("exportCenter.options")}</button>
+    <button type="button" role="tab" aria-selected="false" data-panel="preview">${tr("exportCenter.preview")}</button>
   </div><div class="export-layout"><form class="export-parameters">
-  ${options('format','格式',[['pdf','PDF'],['html','独立 HTML'],['png','PNG 长图']].filter(([format])=>formats.includes(format)))}
-  ${options('scope','内容',[['all','全文'],...(selection?[['selection','当前选区']]:[])])}
-  ${group('纸张','data-print')}
-  ${options('paper','尺寸',Object.keys(paperInches).map(key=>[key,key]))}
-  ${options('direction','方向',[['portrait','纵向'],['landscape','横向']])}
-  ${options('preset','边距',[['custom','自定义'],['narrow','窄'],['normal','适中'],['wide','宽']])}
-  ${options('unit','边距单位',[['in','in'],['mm','mm']])}
-  <div class="export-fields">${input('vertical','上下边距',0,65,'.01')}${input('horizontal','左右边距',0,65,'.01')}</div>
-  ${input('scale','缩放 %',50,200)}${endGroup}
-  ${group('长图','data-image')}${options('pngScale','清晰度',[[1,'1×'],[2,'2×'],[3,'3×']])}
-  ${options('pngWidth','画布宽度',[[480,'手机竖屏 480px'],[760,'阅读卡片 760px'],[1000,'桌面宽幅 1000px']])}
-  ${input('pngPadding','外圈边距 px',0,96)}${options('pngTheme','纸面',[['light','亮色纸面'],['dark','暗色卡片']])}${endGroup}
-  ${group('排版')}${options('theme','打印主题',[['modern','现代无衬线'],['academic','学术论文衬线'],['github','GitHub 风格'],['dark','跟随当前暗色']])}
-  <div class="export-fields">${input('fontSize','字号 px',12,18)}${input('lineHeight','行高',1.4,2,'.05')}</div>
-  ${check('wrapCode','长代码块自动换行')}${check('keepBlocks','尽量避免跨页拆分')}${check('toc','文首插入目录')}
-  ${check('includeProperties','包含 YAML 属性')}${check('chapters','按一级标题分页')}
-  ${check('outline','生成 PDF 书签大纲')}${check('numberEquations','自动编号块级公式')}${endGroup}
-  <details data-print><summary>页眉与页脚</summary>
-  ${['header','footer'].flatMap((key,i)=>['Left','Center','Right'].map((position,n)=>field(key+position,(i?'页脚':'页眉')+['左','中','右'][n],'<input name="NAME" maxlength="160" placeholder="{{title}} {{date}} {{page}} {{total}}">'))).join('')}
-  ${check('hideFirst','首页隐藏页眉页脚')}</details>
-  <details data-print><summary>自定义打印 CSS</summary><textarea name="printCSS" rows="5" maxlength="16000" aria-label="自定义打印 CSS"></textarea></details>
-  <div class="lg-footer"><p role="status"></p><button type="submit" class="primary">保存导出</button></div></form>
-  <div class="export-preview"><iframe sandbox="allow-same-origin" title="导出排版预览"></iframe></div></div>`;
+  ${options('format',tr("exportCenter.format"),[['pdf','PDF'],['html',tr("exportCenter.standaloneHtml")],['png',tr("exportCenter.pngLongImage")]].filter(([format])=>formats.includes(format)))}
+  ${options('scope',tr("canvasView.content"),[['all',tr("exportCenter.entireNote")],...(selection?[['selection',tr("exportCenter.selection")]]:[])])}
+  ${group(tr("exportCenter.paper"),'data-print')}
+  ${options('paper',tr("exportCenter.size"),Object.keys(paperInches).map(key=>[key,key]))}
+  ${options('direction',tr("exportCenter.orientation"),[['portrait',tr("exportCenter.portrait")],['landscape',tr("exportCenter.landscape")]])}
+  ${options('preset',tr("exportCenter.margins"),[['custom',tr("exportCenter.custom")],['narrow',tr("exportCenter.narrow")],['normal',tr("exportCenter.normal")],['wide',tr("exportCenter.wide")]])}
+  ${options('unit',tr("exportCenter.marginUnit"),[['in','in'],['mm','mm']])}
+  <div class="export-fields">${input('vertical',tr("exportCenter.topAndBottom"),0,65,'.01')}${input('horizontal',tr("exportCenter.leftAndRight"),0,65,'.01')}</div>
+  ${input('scale',tr("exportCenter.scale"),50,200)}${endGroup}
+  ${group(tr("exportCenter.longImage"),'data-image')}${options('pngScale',tr("exportCenter.quality"),[[1,'1×'],[2,'2×'],[3,'3×']])}
+  ${options('pngWidth',tr("exportCenter.canvasWidth"),[[480,tr("exportCenter.phonePortrait480px")],[760,tr("exportCenter.readingCard760px")],[1000,tr("exportCenter.desktopWide1000px")]])}
+  ${input('pngPadding',tr("exportCenter.outerMarginPx"),0,96)}${options('pngTheme',tr("exportCenter.paperStyle"),[['light',tr("exportCenter.lightPaper")],['dark',tr("exportCenter.darkCard")]])}${endGroup}
+  ${group(tr("exportCenter.typography"))}${options('theme',tr("exportCenter.printTheme"),[['modern',tr("exportCenter.modernSansSerif")],['academic',tr("exportCenter.academicSerif")],['github',tr("exportCenter.githubStyle")],['dark',tr("exportCenter.matchDarkTheme")]])}
+  <div class="export-fields">${input('fontSize',tr("exportCenter.fontSizePx"),12,18)}${input('lineHeight',tr("exportCenter.lineHeight"),1.4,2,'.05')}</div>
+  ${check('wrapCode',tr("exportCenter.wrapLongCodeBlocks"))}${check('keepBlocks',tr("exportCenter.keepBlocksTogether"))}${check('toc',tr("exportCenter.addTableOfContents"))}
+  ${check('includeProperties',tr("exportCenter.includeYamlProperties"))}${check('chapters',tr("exportCenter.pageBreakBeforeTopLevelHeadings"))}
+  ${check('outline',tr("exportCenter.addPdfOutline"))}${check('numberEquations',tr("exportCenter.numberDisplayEquations"))}${endGroup}
+  <details data-print><summary>${tr("exportCenter.headerFooter")}</summary>
+  ${['header','footer'].flatMap((key,i)=>['Left','Center','Right'].map((position,n)=>field(key+position,(i?tr("exportCenter.footer"):tr("exportCenter.header"))+[tr("exportCenter.left"),tr("exportCenter.center"),tr("exportCenter.right")][n],'<input name="NAME" maxlength="160" placeholder="{{title}} {{date}} {{page}} {{total}}">'))).join('')}
+  ${check('hideFirst',tr("exportCenter.hideHeaderAndFooterOnFirstPage"))}</details>
+  <details data-print><summary>${tr("exportCenter.customPrintCss")}</summary><textarea name="printCSS" rows="5" maxlength="16000" aria-label="${tr("exportCenter.customPrintCss")}"></textarea></details>
+  <div class="lg-footer"><p role="status"></p><button type="submit" class="primary">${tr("exportCenter.saveExport")}</button></div></form>
+  <div class="export-preview"><iframe sandbox="allow-same-origin" title="${tr("exportCenter.exportPreview")}"></iframe></div></div>`;
   const form=dialog.querySelector('.export-parameters'),frame=dialog.querySelector('iframe'),status=form.querySelector('[role=status]');
   const values={...exportDefaults,...preferences}, fields=form.elements;
   for(const [key,value] of Object.entries(values)) if(fields[key]) {
@@ -161,7 +161,7 @@ export function showExportCenter({initial,formats=['pdf','html','png'],preferenc
         }:null;
         frame.srcdoc=htmlDocument(result.title,preview.body,result.mathCSS+exportStyle(settings,format)+
           ':root{--sheet:'+paper+'}'+preview.style+cssSafe(settings.printCSS));
-        status.textContent=format==='pdf'?'预览按内容块估算分页。最终分页由打印引擎计算。':'';
+        status.textContent=format==='pdf'?tr("exportCenter.previewPageBreaksAreApproximateThePrint"):'';
       }catch(error){if(t===ticket)status.textContent=errorMessage(error);}
     },130);
   }
@@ -198,4 +198,3 @@ export function inlineRichStyles(div) {
     element.style.cssText+=';'+style;
   return div.innerHTML;
 }
-import {errorMessage} from './error-message.js';

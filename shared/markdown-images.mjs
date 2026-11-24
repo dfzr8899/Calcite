@@ -1,4 +1,5 @@
 import {marked} from 'marked';
+import {t as tr} from './i18n/index.mjs';
 
 const imageExtension=/\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i;
 const opaque=/(^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\2[ \t]*(?=\r?$)|(?![\s\S])))|(`+)[^\n]*?\3(?!`)|<!--[^]*?(?:-->|$)/gm;
@@ -18,7 +19,7 @@ function markdownImages(text) {
   marked.walkTokens(tokens,token=>{
     if(token.type==='image')add(token.raw,token.href,token.text);
     if(token.type==='html')for(const tag of token.raw.matchAll(/<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/gi)) {
-      add(tag[0],tag[1]||tag[2]||tag[3],'图片');
+      add(tag[0],tag[1]||tag[2]||tag[3],tr('common.image'));
     }
   });
   outsideCode(text,value=>{

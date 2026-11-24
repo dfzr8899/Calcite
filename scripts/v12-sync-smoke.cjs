@@ -79,7 +79,7 @@ async function verifyLan(scratch) {
     await warning.getByText('同步版本已到达，当前草稿已保留。').waitFor();
     assert((await editor.textContent()).includes('未落盘的本机草稿'));
     assert.match(await text(b,'并行.md'),/远端新段落/);
-    await warning.getByRole('button',{name:'加载磁盘版本'}).click();
+    await warning.getByRole('button',{name:'加载磁盘新版'}).click();
     await warning.waitFor({state:'hidden'});
     await put(a,'并行.md','甲首行\n\n甲改同行\n\n乙尾行\n');
     await put(b,'并行.md','甲首行\n\n乙改同行\n\n乙尾行\n');

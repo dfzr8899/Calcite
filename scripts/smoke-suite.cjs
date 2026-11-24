@@ -5,7 +5,7 @@ const suites=[
   'smoke','security-smoke','layout-smoke','appearance-smoke','graph-smoke',
   'workspace-smoke','knowledge-smoke','watcher-index-smoke','export-editor-smoke',
   'v12-sync-smoke','interaction-smoke','mobile-smoke','offline-auto-sync-smoke',
-  'editor-index-smoke','pkm-foam-smoke'
+  'editor-index-smoke','pkm-foam-smoke','data-safety-smoke','i18n-smoke'
 ];
 
 for(const suite of suites){

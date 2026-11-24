@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import {noteHeadings as indexedHeadings} from '../shared/core/vault-index.mjs';
 import {encodeWiki,headingIdentifiers,wikiIdentifiers} from '../shared/note-links.mjs';
 import {syntaxTree} from '@codemirror/language';
@@ -116,9 +117,9 @@ export function installOutline({ $, escape, headings, active, mode, source }) {
       if (term ? !text.toLocaleLowerCase().includes(term) : hidden[index]) return '';
       const closed = folded()?.has(sectionKey(heading, index));
       return '<div class="outline-row" data-level="'+level+'" style="--level:'+level+'">' +
-        '<button type="button" class="outline-fold" data-fold-heading="'+index+'" title="折叠或展开正文" aria-label="折叠或展开 '+escape(text)+'" aria-expanded="'+!closed+'"></button>' +
+        '<button type="button" class="outline-fold" data-fold-heading="'+index+`" title="${tr("navigation.foldOrUnfoldSection")}" aria-label="${tr("navigation.foldOrUnfold")} `+escape(text)+'" aria-expanded="'+!closed+'"></button>' +
         '<button class="outline-item '+(index===selected?'current':'')+'" data-heading="'+index+'" title="'+escape(text)+'"><span>'+escape(text)+'</span></button></div>';
-    }).join('') || '<p class="side-empty">'+(term?'没有匹配的标题。':'添加标题后，大纲会出现在这里。')+'</p>';
+    }).join('') || '<p class="side-empty">'+(term?tr("navigation.noMatchingHeadings"):tr("navigation.addAHeadingToSeeTheOutline"))+'</p>';
     schedule();
   }
   function toggle(index) {

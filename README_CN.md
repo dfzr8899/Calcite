@@ -4,7 +4,7 @@
 
 **用双链串起笔记，用 Markdown 留住原稿。**
 
-![版本 v1.0.0](https://img.shields.io/badge/version-v1.0.0-blue) [![MIT 许可](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![JavaScript](https://img.shields.io/badge/language-JavaScript-yellow)
+![版本 v1.1.0](https://img.shields.io/badge/version-v1.1.0-blue) [![MIT 许可](https://img.shields.io/badge/license-MIT-green)](LICENSE) ![JavaScript](https://img.shields.io/badge/language-JavaScript-yellow)
 
 Calcite 是面向 Windows 和 Android 的本地优先 Markdown 知识库。适合把学习笔记、研究资料或项目文档存成文件，又希望跨设备读写、沿着双链查找资料的人。使用 Calcite 无需注册账号或订阅。
 

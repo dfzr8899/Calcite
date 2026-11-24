@@ -1,6 +1,9 @@
+const {getLocale, t:tr, resolveLocale, setLocale, setStrictMessages}=require("../shared/i18n/index.mjs");
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, protocol, Tray, nativeTheme, clipboard, safeStorage, net } = require('electron');
 const {normalizeLineEndings}=require('../shared/text-files.mjs');
-const {planLinkRefactor}=require('../shared/core/link-refactor.mjs');
+const {planLinkRefactor,planCanvasLinkRefactor}=require('../shared/core/link-refactor.mjs');
+const {guardedSave}=require('../shared/core/guarded-save.mjs');
+const {readSnapshot,refactorText,activityFor}=require('./data-safety.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -34,7 +37,7 @@ const vault=createVaultService({queue:task=>serialized(task)(),publish:event=>{
   if (rendererReady&&win&&!win.isDestroyed()) win.webContents.send('vault:external-change',event);
   else pendingExternal.push(event);
   if(event.source!=='sync')gitSync.arm();
-},fail:console.error,onInternal:()=>gitSync.arm()});
+},fail:console.error,onInternal:()=>gitSync.arm(),onAssetChange:()=>gitSync.arm()});
 const gitSync=createGitSync({safeStorage,net,run:task=>serialized(task)(),network:!process.env.CALCITE_TEST,allowLocal:!!process.env.CALCITE_TEST,
   archive:file=>shell.trashItem(file),
   publish:value=>{if(rendererReady&&win&&!win.isDestroyed())win.webContents.send('sync:state',value);},
@@ -91,24 +94,24 @@ protocol.registerSchemesAsPrivileged([{scheme:'note-image',privileges:{standard:
 const inVault = value => !!root&&space.within(root,value);
 const allowed = value => inVault(value)||grants.has(pathKey(value));
 async function check(file,image=false) {
-  if (!path.isAbsolute(file)||file.includes('\0')) throw Error('文件路径无效。');
+  if (!path.isAbsolute(file)||file.includes('\0')) throw Error(tr("main.invalidFilePath"));
   const permitted = value => image ? inVault(value)||[...grants.values()].some(note=>
     md.test(note)&&space.within(path.dirname(note),value)) : allowed(value);
-  if (!permitted(file)) throw Error('此路径未授权，请通过打开文件或文件夹访问。');
+  if (!permitted(file)) throw Error(tr("main.thisPathIsNotAuthorizedOpenThe"));
   const real=await fs.realpath(file);
-  if (!permitted(real)) throw Error('不支持访问工作区外的符号链接。');
+  if (!permitted(real)) throw Error(tr("main.symlinksOutsideTheWorkspaceCannotBeAccessed"));
   return real;
 }
 
 async function canonicalDocument(file,create=false) {
-  if (typeof file!=='string'||!path.isAbsolute(file)||!documentType.test(file)) throw Error('请选择 Markdown 或 Canvas 文件。');
+  if (typeof file!=='string'||!path.isAbsolute(file)||!documentType.test(file)) throw Error(tr("main.selectAMarkdownOrCanvasFile"));
   let real;
   try {real=await fs.realpath(file);}
   catch(error) {
     if (!create||error.code!=='ENOENT') throw error;
     return path.join(await fs.realpath(path.dirname(file)),path.basename(file));
   }
-  if (!documentType.test(real)||!(await fs.stat(real)).isFile()) throw Error('文档文件无效。');
+  if (!documentType.test(real)||!(await fs.stat(real)).isFile()) throw Error(tr("main.invalidDocumentFile"));
   return real;
 }
 
@@ -131,15 +134,15 @@ async function authorizeFiles(files) {
 const imageMime = {png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',svg:'image/svg+xml',avif:'image/avif',bmp:'image/bmp'};
 async function readLocalImage(url) {
   const parsed = new URL(url);
-  if (parsed.protocol !== 'note-image:' || parsed.hostname !== 'local') throw Error('无效的本地图片链接。');
+  if (parsed.protocol !== 'note-image:' || parsed.hostname !== 'local') throw Error(tr("main.invalidLocalImageLink"));
   const file = await check(decodeURIComponent(parsed.pathname.slice(1)),true);
   const mime = imageMime[path.extname(file).slice(1).toLowerCase()];
   const handle = await fs.open(file,'r');
   try {
     const stat=await handle.stat();
-    if (!mime || !stat.isFile() || !stat.size || stat.size>32*1024*1024) throw Error('无法读取本地图片。');
+    if (!mime || !stat.isFile() || !stat.size || stat.size>32*1024*1024) throw Error(tr("main.couldNotReadTheLocalImage"));
     const bytes=await handle.readFile();
-    if (!validImage(mime,bytes)) throw Error('本地图片格式无效。');
+    if (!validImage(mime,bytes)) throw Error(tr("main.invalidLocalImageFormat"));
     return {mime,bytes};
   } finally { await handle.close(); }
 }
@@ -163,7 +166,7 @@ handleMain('export-image',async (_,url)=>{
 });
 const configPath = () => path.join(app.getPath('userData'),'workspace.json');
 async function config() { try {return JSON.parse(await fs.readFile(configPath(),'utf8'));} catch {return {};} }
-function saveConfig(extra) { const next=configQueue.then(async()=>{const temp=configPath()+'.tmp';await fs.writeFile(temp,JSON.stringify({...await config(),...extra}),'utf8');await fs.rename(temp,configPath());});configQueue=next.catch(()=>{});return next; }
+function saveConfig(extra) { const next=configQueue.then(async()=>{await space.atomicWriteFile(configPath(),JSON.stringify({...await config(),...extra}));});configQueue=next.catch(()=>{});return next; }
 function send(action) { if (rendererReady && win && !win.isDestroyed()) win.webContents.send('action', action); }
 function fromMainWindow(event) {
   if (!win||win.isDestroyed()||event.sender!==win.webContents||event.senderFrame!==win.webContents.mainFrame) return false;
@@ -172,8 +175,8 @@ function fromMainWindow(event) {
 }
 function handleMain(channel,handler) {
   ipcMain.handle(channel,(event,...args)=>{
-    if (!fromMainWindow(event)) throw Error('操作只允许从 Calcite 主窗口发起。');
-    if (!validArguments(channel,args)) throw Error('操作参数无效或超过上限。');
+    if (!fromMainWindow(event)) throw Error(tr("main.thisActionIsOnlyAvailableFromThe"));
+    if (!validArguments(channel,args)) throw Error(tr("main.theRequestParametersAreInvalidOrExceed"));
     return handler(event,...args);
   });
 }
@@ -207,7 +210,49 @@ function setWindowAppearance({theme,glass,reduceTransparency}) {
 }
 
 handleMain('window:set-appearance',(_,settings)=>setWindowAppearance(settings));
+function refreshApplicationMenu() {
+  if(tray){
+    tray.setToolTip(rendererReady?tr("main.calciteRunning"):tr("main.calciteStarting"));
+    tray.setContextMenu(Menu.buildFromTemplate([
+      {label:tr("main.showCalcite"),click:showWindow},
+      {label:tr("main.openMarkdown"),click:()=>{showWindow();send('open');}},
+      {type:'separator'},
+      {label:tr("main.quitCalcite"),click:()=>win?.close()}
+    ]));
+  }
+  const command=(key,action)=>({label:tr(key),click:()=>send(action)});
+  const role=(key,value)=>({label:tr(key),role:value});
+  const separator={type:'separator'};
+  const items=[
+    {label:tr('main.files'),submenu:[
+      command('main.newNote','new'),command('main.openNote','open'),command('main.openFolder','folder'),separator,
+      command('main.save','save'),command('main.saveAs','saveAs'),command('main.exportPdf','pdf'),separator,command('main.quit','quit')
+    ]},
+    {label:tr('main.edit'),submenu:[
+      role('main.undo','undo'),role('main.redo','redo'),separator,role('main.cut','cut'),role('main.copy','copy'),
+      role('main.paste','paste'),role('main.selectAll','selectAll')
+    ]},
+    {label:tr('main.view'),submenu:[
+      command('main.commandPalette','palette'),command('main.find','find'),command('main.toggleSidebar','sidebar'),
+      command('main.focusMode','focus'),role('main.fullScreen','togglefullscreen'),role('main.zoomIn','zoomIn'),
+      role('main.zoomOut','zoomOut'),role('main.resetZoom','resetZoom')
+    ]},
+    {label:tr('main.windowMenu'),submenu:[role('main.minimize','minimize'),role('main.closeWindow','close')]}
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(items));
+}
+
+function systemLanguage() {
+  return process.env.CALCITE_TEST ? 'zh-CN' : app.getPreferredSystemLanguages()[0] || app.getLocale();
+}
+handleMain('window:language',async(_, language)=>{
+  await saveConfig({language});
+  setLocale(resolveLocale(language,systemLanguage()));
+  refreshApplicationMenu();
+});
 app.whenReady().then(async()=>{
+  setStrictMessages(!!process.env.CALCITE_TEST || !app.isPackaged);
+
   if (!primaryInstance) return;
   protocol.handle('note-image', async req => {
     try {
@@ -216,10 +261,13 @@ app.whenReady().then(async()=>{
     } catch { return new Response('',{status:404}); }
   });
   const savedConfig = config();
+  const language = (await savedConfig).language ?? "auto";
+  setLocale(resolveLocale(language,systemLanguage()));
   startupConfig = savedConfig.then(async cfg => {
     if (typeof cfg.root==='string'&&path.isAbsolute(cfg.root)) {
       root=await fs.realpath(cfg.root).then(async file=>(await fs.stat(file)).isDirectory()?file:'').catch(()=> '');
     }
+    const recovered=await recoverRefactor(root);
     vault.start(root);
     await gitSync.switchVault(root);
     if (Array.isArray(cfg.grantedFiles)) for (const file of cfg.grantedFiles.slice(0,512)) {
@@ -233,7 +281,7 @@ app.whenReady().then(async()=>{
         else Object.assign(tab,{path:null,mtime:null,saved:'',deleted:false});
       });
     }
-    return {root,features:validArguments('features',[cfg.features])?cfg.features:{},session};
+    return {root,recovered,features:validArguments('features',[cfg.features])?cfg.features:{},session};
   });
   const previousTheme = (await savedConfig).session?.light;
   await enqueueLaunch();
@@ -264,26 +312,20 @@ app.whenReady().then(async()=>{
   win.on('blur', () => {gitSync.focus(false);win.webContents.send('window-focus-state',false);});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   win.webContents.on('will-navigate',e=>e.preventDefault());
-  win.webContents.on('did-start-loading',()=>{rendererReady=false;tray?.setToolTip('Calcite · 正在启动…');});
+  win.webContents.on('did-start-loading',()=>{rendererReady=false;tray?.setToolTip(tr("main.calciteStarting"));});
   win.on('close',e=>{if(!closing&&rendererReady){e.preventDefault();send('quit');}});
   if (process.platform === 'win32' && !process.env.CALCITE_TEST) {
     tray = new Tray(appIcon);
-    tray.setToolTip('Calcite · 正在启动…');
+    tray.setToolTip(tr("main.calciteStarting"));
     tray.on('click',showWindow);
-    tray.setContextMenu(Menu.buildFromTemplate([
-      {label:'显示 Calcite',click:showWindow},
-      {label:'打开 Markdown…',click:()=>{showWindow();send('open');}},
-      {type:'separator'},
-      {label:'退出 Calcite',click:()=>win?.close()}
-    ]));
   }
-  const items = [{label:'文件',submenu:[{label:'新建文档',click:()=>send('new')},{label:'打开文档…',click:()=>send('open')},{label:'打开文件夹…',click:()=>send('folder')},{type:'separator'},{label:'保存',click:()=>send('save')},{label:'另存为…',click:()=>send('saveAs')},{label:'导出 PDF…',click:()=>send('pdf')},{type:'separator'},{label:'退出',click:()=>send('quit')}]},{label:'编辑',submenu:[{role:'undo',label:'撤销'},{role:'redo',label:'重做'},{type:'separator'},{role:'cut',label:'剪切'},{role:'copy',label:'复制'},{role:'paste',label:'粘贴'},{role:'selectAll',label:'全选'}]},{label:'视图',submenu:[{label:'命令面板',click:()=>send('palette')},{label:'查找',click:()=>send('find')},{label:'切换侧栏',click:()=>send('sidebar')},{label:'专注模式',click:()=>send('focus')},{role:'togglefullscreen',label:'全屏'},{role:'zoomIn',label:'放大'},{role:'zoomOut',label:'缩小'},{role:'resetZoom',label:'重置缩放'}]}];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(items));
+  refreshApplicationMenu();
   await win.loadFile(entry,{
-    query: typeof previousTheme==='boolean' ? {legacyTheme:previousTheme?'light':'dark'} : {}
+    query: {language,systemLanguage:systemLanguage(),...(process.env.CALCITE_TEST?{languageTest:'1'}:{}),
+      ...(typeof previousTheme==='boolean'?{legacyTheme:previousTheme?'light':'dark'}:{})}
   });
 }).catch(error=>{
-  dialog.showErrorBox('Calcite 启动失败',error.message);
+  dialog.showErrorBox(tr("main.calciteCouldNotStart"),error.message);
   app.exit(1);
 });
 app.on('window-all-closed',()=>app.quit());
@@ -305,12 +347,29 @@ handleMain('bootstrap',async()=>{
 });
 handleMain('renderer-ready',event=>{
   rendererReady = true;
-  tray?.setToolTip('Calcite · 正在运行');
+  tray?.setToolTip(tr("main.calciteRunning"));
   for (const batch of pendingExternal) if (batch.root===root) win.webContents.send('vault:external-change',batch);
   pendingExternal=[];
   return takePendingFiles();
 });
+function activity(dir=root,onRecoverFailure) {
+  if(!dir)throw Error(tr('main.openAWorkspaceFirst'));
+  return activityFor(dir,(file,current)=>new GitEngine(dir).history.record(file,current,'undo','undo-review'),onRecoverFailure);
+}
+
+async function recoverRefactor(dir) {
+  if(!dir)return false;
+  let failed=false;
+  const recovered=await activity(dir,(error,quarantined)=>{
+    failed=true;
+    console.warn('Quarantined unrecoverable refactor journal:',quarantined,error);
+  }).recover();
+  if(recovered)console.info(tr('dataSafety.recovered'),dir);
+  return failed?'quarantined':recovered;
+}
+
 async function setVault(next,retained) {
+  const recovered=await recoverRefactor(next);
   const previous=root;
   await gitSync.switchVault('');
   root=next;
@@ -323,10 +382,10 @@ async function setVault(next,retained) {
     .filter(dir=>dir!==root);
   if(root)recentVaults.push(root);
   await saveConfig({root,recentVaults:recentVaults.slice(-12),grantedFiles:grantSnapshot()});
-  return {root,tree:root?await vault.tree():[],retained:retained.filter(allowed)};
+  return {root,recovered,tree:root?await vault.tree():[],retained:retained.filter(allowed)};
 }
 handleMain('folder',serialized(async(_,retained=[])=>{
-  const chosen=await dialog.showOpenDialog(win,{properties:['openDirectory']});
+  const chosen=await dialog.showOpenDialog(win,{title:tr('main.openFolder'),properties:['openDirectory']});
   if(chosen.canceled)return null;
   return setVault(await fs.realpath(chosen.filePaths[0]),retained);
 }));
@@ -336,89 +395,89 @@ handleMain('recent-vaults',async()=>{
 });
 handleMain('switch-vault',serialized(async(_,dir,retained=[])=>{
   const known=((await config()).recentVaults||[]).find(item=>pathKey(item)===pathKey(dir));
-  if(!known)throw Error('请先通过文件夹选择器打开此知识库。');
+  if(!known)throw Error(tr("main.openThisVaultThroughTheFolderPicker"));
   const real=await fs.realpath(known);
-  if(pathKey(real)!==pathKey(known)||!(await fs.stat(real)).isDirectory())throw Error('知识库路径已变更，请重新选择。');
+  if(pathKey(real)!==pathKey(known)||!(await fs.stat(real)).isDirectory())throw Error(tr("main.theVaultPathChangedSelectItAgain"));
   return setVault(real,retained);
 }));
 handleMain('close-vault',serialized((_,retained=[])=>setVault('',retained)));
 handleMain('tree',()=>vault.tree());
 handleMain('open',serialized(async(_,defaultPath)=>{
-  const chosen=await dialog.showOpenDialog(win,{defaultPath,properties:['openFile','multiSelections'],filters:[{name:'Markdown',extensions:['md','markdown','mdown']}]});
+  const chosen=await dialog.showOpenDialog(win,{title:tr('main.openNote'),defaultPath,properties:['openFile','multiSelections'],filters:[{name:'Markdown',extensions:['md','markdown','mdown']}]});
   return chosen.canceled?[]:authorizeFiles(chosen.filePaths);
 }));
 handleMain('release-file',serialized(async(_,file)=>{
   if (grants.delete(pathKey(file))) await saveConfig({grantedFiles:grantSnapshot()});
 }));
-handleMain('read',async(_,file)=>{
-  const real=await check(file);
-  if (!documentType.test(real)) throw Error('只能读取 Markdown 或 Canvas 文档。');
-  const handle=await fs.open(real,'r');
-  try {
-    const stat=await handle.stat();
-    if(!stat.isFile()||stat.size>(md.test(real)?MAX_NOTE:MAX_CANVAS)) throw Error('文档无效或超过大小限制。');
-    const raw=await handle.readFile('utf8'),text=normalizeLineEndings(real,raw);
-    return {text,mtime:stat.mtimeMs,needsLf:raw!==text};
-  } finally {await handle.close();}
+handleMain('read',async(_,file,allowMissing)=>{
+  try{
+    const real=await check(file);
+    if(!documentType.test(real))throw Error(tr("main.onlyMarkdownAndCanvasFilesCanBe"));
+    const {raw,...disk}=await readSnapshot(real,md.test(real)?MAX_NOTE:MAX_CANVAS);
+    return disk;
+  }catch(error){
+    if(allowMissing&&error.code==='ENOENT')return null;
+    throw error;
+  }
 });
 handleMain('save',serialized(async(_,data)=>{
   let p=data.path;
   const chosen=!p||data.saveAs;
   if(chosen){
-    const r=await dialog.showSaveDialog(win,{defaultPath:p||path.join(root||app.getPath('documents'),path.basename(data.name||'未命名.md')),filters:[{name:'Markdown',extensions:['md']}]});
+    const r=await dialog.showSaveDialog(win,{title:tr('main.saveAs'),defaultPath:p||path.join(root||app.getPath('documents'),path.basename(data.name||'未命名.md')),filters:[{name:'Markdown',extensions:['md']}]});
     if(r.canceled)return null;
     p=await canonicalDocument(r.filePath,true);
   }
-  if(!chosen&&!allowed(p))throw Error('此文件未授权');
+  if(!chosen&&!allowed(p))throw Error(tr("main.accessToThisFileIsNotAuthorized"));
   const limit=md.test(p)?MAX_NOTE:MAX_CANVAS;
   const text=normalizeLineEndings(p,data.text);
-  if(Buffer.byteLength(text)>limit) throw Error('文档超过大小限制。');
-  let previous, stat;
-  try {
-    const real = chosen?await canonicalDocument(p):await check(p);
-    if (path.relative(real,p)) throw Error('无法写入符号链接。');
-    stat = await fs.stat(real);
-    if (!stat.isFile()||stat.size>limit) throw Error('文档无效或超过大小限制。');
-    previous = await fs.readFile(real,'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    const parent = path.dirname(p);
-    if (path.relative(await fs.realpath(parent),parent)) throw Error('无法写入符号链接。');
+  if(Buffer.byteLength(text)>limit) throw Error(tr("main.theDocumentExceedsTheSizeLimit"));
+  const read=async()=>{
+    try {
+      const real=chosen?await canonicalDocument(p):await check(p);
+      if(path.relative(real,p))throw Error(tr('main.cannotWriteToASymlink'));
+      return await readSnapshot(real,limit);
+    }catch(error){
+      if(error.code!=='ENOENT')throw error;
+      const parent=path.dirname(p);
+      if(path.relative(await fs.realpath(parent),parent))throw Error(tr('main.cannotWriteToASymlink'));
+      return null;
+    }
+  };
+  const cfg=await config();
+  const result=await guardedSave(p,data,{read,chosen,write:(value,guard)=>space.atomicWriteFile(p,value,guard),
+    archive:previous=>history().record(p,previous,(cfg.features)?.historyLimit)});
+  if(result.conflict||result.reloaded){
+    const {raw,...publicResult}=result;
+    return publicResult;
   }
-  const disk=normalizeLineEndings(p,previous??'');
-  if (!chosen && (!stat || !Number.isFinite(data.mtime) || typeof data.saved!=='string' || disk!==normalizeLineEndings(p,data.saved))) {
-    return {conflict:true,text:disk,mtime:stat?.mtimeMs};
-  }
-  if (previous !== text) {
-    if (previous !== undefined) await history().record(p,previous,(await config()).features?.historyLimit);
-    await space.atomicWrite(p,text);
-    await vault.internal({written:[{file:p,text}]});
-  }
+  if(result.written)await vault.internal({written:[{file:p,text}]});
   if(chosen&&!inVault(p)) {
     grant(p);
     await saveConfig({grantedFiles:grantSnapshot()});
   }
-  return {path:p,mtime:(await fs.stat(p)).mtimeMs};
+  const {raw,...disk}=await readSnapshot(p,limit);
+  return {path:p,...disk};
 }));
 handleMain('session',async(_,data)=>{await saveConfig({session:restrictedSession(data)});return true;});
 handleMain('search',async(_,query)=>(await vault.index())?.search(query)??[]);
 handleMain('search-index',async(_,cursor)=>(await vault.index())?.searchSnapshot(cursor)??{cursor:null,full:true,notes:[],removed:[]});
 handleMain('external',async(_,url)=>{
   const target=new URL(url);
-  if (!['http:','https:'].includes(target.protocol)||target.username||target.password) throw Error('只支持 HTTP 和 HTTPS 外部链接。');
+  if (!['http:','https:'].includes(target.protocol)||target.username||target.password) throw Error(tr("main.onlyHttpAndHttpsLinksCanBe"));
   await shell.openExternal(target.href);
 });
 handleMain('reveal',async(_,p,openFolder=false)=>{
   const real=await check(p);
   if (openFolder) {
-    if (!(await fs.stat(real)).isDirectory()) throw Error('请选择要打开的文件夹。');
-    if (await shell.openPath(real)) throw Error('无法在资源管理器中打开文件夹。');
+    if (!(await fs.stat(real)).isDirectory()) throw Error(tr("main.selectAFolderToOpen"));
+    if (await shell.openPath(real)) throw Error(tr("main.couldNotOpenTheFolderInFile"));
   } else shell.showItemInFolder(real);
 });
 handleMain('reveal-image',async(_,p)=>{
   const real=await check(p,true);
   if (!/\.(?:png|jpe?g|gif|webp|avif|bmp|svg|ico|tiff?)$/i.test(real)||!(await fs.stat(real)).isFile())
-    throw Error('本地图片不可用。');
+    throw Error(tr("main.localImageUnavailable"));
   shell.showItemInFolder(real);
 });
 handleMain('clipboard-write-text',(_,text)=>{clipboard.writeText(text);});
@@ -426,7 +485,7 @@ handleMain('clipboard-paste',(event,plain)=>{
   if(plain)event.sender.pasteAndMatchStyle();
   else event.sender.paste();
 });
-handleMain('discard',async()=>{return (await dialog.showMessageBox(win,{type:'warning',message:'此文档有未保存的修改',detail:'关闭后将丢弃本次修改。',buttons:['继续编辑','丢弃修改'],defaultId:0,cancelId:0})).response===1;});
+handleMain('discard',async()=>{return (await dialog.showMessageBox(win,{type:'warning',message:tr("main.thisNoteHasUnsavedChanges"),detail:tr("main.closingItWillDiscardYourChanges"),buttons:[tr("main.keepEditing"),tr("main.discardChanges")],defaultId:0,cancelId:0})).response===1;});
 async function withExportWindow(html,options,render) {
   const filename = path.join(app.getPath('userData'),'export-'+crypto.randomUUID()+'.html');
   const target=pathToFileURL(filename).href;
@@ -455,8 +514,8 @@ async function withExportWindow(html,options,render) {
   }
 }
 handleMain('pdf',async(_,html,options={})=>{
-  const safeName=(options.title||'文档').replace(/[<>:"/\\|?*]/g,'_');
-  const selected=await dialog.showSaveDialog(win,{defaultPath:safeName+'.pdf',filters:[{name:'PDF',extensions:['pdf']}]});
+  const safeName=(options.title||tr("main.note")).replace(/[<>:"/\\|?*]/g,'_');
+  const selected=await dialog.showSaveDialog(win,{title:tr('main.exportPdf'),defaultPath:safeName+'.pdf',filters:[{name:'PDF',extensions:['pdf']}]});
   if(selected.canceled)return false;
   const {css,print}=printSettings(options);
   const prepared=html+'<style>'+css+'</style>';
@@ -464,8 +523,8 @@ handleMain('pdf',async(_,html,options={})=>{
   return true;
 });
 handleMain('pandoc-export', async (_, {format,html,name})=>{
-  if (!['docx','epub'].includes(format) || typeof html!=='string') throw Error('未知导出格式。');
-  const selected=await dialog.showSaveDialog(win,{defaultPath:name+'.'+format,filters:[{name:format.toUpperCase(),extensions:[format]}]});
+  if (!['docx','epub'].includes(format) || typeof html!=='string') throw Error(tr("main.unknownExportFormat"));
+  const selected=await dialog.showSaveDialog(win,{title:tr('documentMenu.export'),defaultPath:name+'.'+format,filters:[{name:format.toUpperCase(),extensions:[format]}]});
   if (selected.canceled) return false;
   const folder=await fs.mkdtemp(path.join(app.getPath('temp'),'calcite-export-'));
   const input=path.join(folder,'input.html');
@@ -477,8 +536,8 @@ handleMain('pandoc-export', async (_, {format,html,name})=>{
     await fs.copyFile(output,selected.filePath);
     return true;
   } catch (error) {
-    if (error.code==='ENOENT') throw Error('请安装 Pandoc 并将它加入 PATH 后再导出。');
-    throw Error('Pandoc 导出失败：'+(error.stderr?.trim().slice(0,500)||error.message));
+    if (error.code==='ENOENT') throw Error(tr("main.installPandocAndAddItToPath"));
+    throw Error(tr("main.pandocExportFailed")+(error.stderr?.trim().slice(0,500)||error.message));
   } finally {
     await fs.unlink(input).catch(()=>{});
     await fs.unlink(output).catch(()=>{});
@@ -500,26 +559,26 @@ handleMain('sync:conflict-files',(_,file)=>gitSync.conflictFiles(file));
 handleMain('sync:archive-conflicts',serialized(()=>gitSync.archiveConflicts()));
 handleMain('sync:restore-version',serialized((_,file,id)=>gitSync.restoreVersion(file,id)));
 handleMain('sync:clear-conflict',serialized(async(_,file)=>{
-  if(!inVault(file))throw Error('冲突路径不在当前工作区。');
+  if(!inVault(file))throw Error(tr("main.theConflictPathIsOutsideTheCurrent"));
   return gitSync.clearConflict(file);
 }));
 
 async function workspaceEntry(target, allowRoot = false) {
   if (!root || typeof target !== 'string' || !space.within(root, target) || !allowRoot && path.relative(root,target) === '') {
-    throw Error('请选择工作区内的文件或文件夹。');
+    throw Error(tr("main.selectAFileOrFolderInThe"));
   }
   const real = await check(target);
-  if (path.relative(real, target)) throw Error('无法操作符号链接。');
+  if (path.relative(real, target)) throw Error(tr("main.thisActionCannotBePerformedOnA"));
   return real;
 }
 async function createNoteDirectory(target,created) {
-  if (!root || typeof target !== 'string' || !space.within(root,target)) throw Error('新建笔记的位置必须在工作区内。');
+  if (!root || typeof target !== 'string' || !space.within(root,target)) throw Error(tr("main.createTheNoteInsideTheWorkspace"));
   let folder = root;
   for (const part of path.relative(root,target).split(path.sep).filter(Boolean)) {
     folder = path.join(folder,space.validName(part));
     await fs.mkdir(folder).then(()=>created.push(folder)).catch(error=>{if(error.code!=='EEXIST')throw error;});
     const stat = await fs.lstat(folder);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('笔记目录包含符号链接或同名文件。');
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error(tr("main.theNoteDirectoryContainsASymlinkOr"));
   }
   return folder;
 }
@@ -535,7 +594,7 @@ handleMain('workspace-edit', serialized(async (_, edit) => {
     if (type === 'folder') {await fs.mkdir(target);directories.push(target);}
     else {
       const text = typeof edit.text === 'string' ? edit.text : '';
-      if (Buffer.byteLength(text)>2*1024*1024) throw Error('笔记模板过大。');
+      if (Buffer.byteLength(text)>2*1024*1024) throw Error(tr("main.theNoteTemplateIsTooLarge"));
       const normalized=normalizeLineEndings(target,text);
       try { await fs.writeFile(target,normalized,{flag:'wx'});written.push({file:target,text:normalized}); }
       catch (error) {
@@ -549,7 +608,7 @@ handleMain('workspace-edit', serialized(async (_, edit) => {
   }
   const from = await workspaceEntry(edit.path);
   const info=await fs.stat(from);
-  if (!info.isDirectory()&&(!info.isFile()||!documentType.test(from))) throw Error('只能操作笔记、画布或文件夹。');
+  if (!info.isDirectory()&&(!info.isFile()||!documentType.test(from))) throw Error(tr("main.thisActionRequiresANoteCanvasOr"));
   const directory = info.isDirectory();
   const index=await vault.index();
   const descendants=directory?await vault.entriesWithin(from):[];
@@ -558,11 +617,11 @@ handleMain('workspace-edit', serialized(async (_, edit) => {
     /\.canvas$/i.test(from)?[from]:[];
   if (type === 'trash') {
     const removed=[...new Set([from,...directories,...canvases,...(directory?index.pathsWithin(from):[])])];
-    await shell.trashItem(from);
+    const logged=await activity().softDelete(from);
     await vault.internal({removed});
-    return {tree:await vault.tree()};
+    return {tree:await vault.tree(),activity:logged};
   }
-  if (type !== 'rename' && type !== 'move') throw Error('未知文件操作。');
+  if (type !== 'rename' && type !== 'move') throw Error(tr("main.unknownFileAction"));
   const folder = type === 'move' ? await workspaceEntry(edit.parent,true) : path.dirname(from);
   let name = type === 'rename' ? space.validName(edit.name.trim()) : path.basename(from);
   if (!directory) {
@@ -571,50 +630,67 @@ handleMain('workspace-edit', serialized(async (_, edit) => {
   }
   const to = path.join(folder,name);
   if (from === to) return {path:to,tree:await vault.tree(),changes:[]};
-  if (directory && path.relative(from,to) && space.within(from,to)) throw Error('无法把文件夹移入自身。');
+  if (directory && path.relative(from,to) && space.within(from,to)) throw Error(tr("main.aFolderCannotBeMovedIntoItself"));
   const caseOnly = process.platform === 'win32' && from.toLowerCase() === to.toLowerCase();
-  if (!caseOnly && await fs.lstat(to).then(() => true, e => {if(e.code==='ENOENT')return false;throw e;})) throw Error('目标位置已有同名文件或文件夹。');
-  const {move,changes,refactor}=await planLinkRefactor(index,from,to,drafts,async note=>{
+  if (!caseOnly && await fs.lstat(to).then(() => true, e => {if(e.code==='ENOENT')return false;throw e;})) throw Error(tr("main.aFileOrFolderWithThatName"));
+  const {move,changes:noteChanges,refactor:noteRefactor}=await planLinkRefactor(index,from,to,drafts,async note=>{
     const file=await workspaceEntry(note);
     const {mtimeMs}=await fs.stat(file);
-    return {text:await fs.readFile(file,'utf8'),mtime:mtimeMs};
+    return {text:refactorText(await fs.readFile(file)),mtime:mtimeMs};
   });
+  const allCanvases=(await vault.entriesWithin(root)).filter(row=>!row.children&&/\.canvas$/i.test(row.path)).map(row=>row.path);
+  const {changes:canvasChanges,refactor:canvasRefactor}=await planCanvasLinkRefactor(index,move,allCanvases,drafts,async canvasFile=>{
+    const file=await workspaceEntry(canvasFile);
+    const stat=await fs.stat(file);
+    if(!stat.isFile()||stat.size>MAX_CANVAS)return null;
+    return {text:refactorText(await fs.readFile(file)),mtime:stat.mtimeMs};
+  });
+  const changes=[...noteChanges,...canvasChanges];
+  const refactor={notes:noteRefactor.notes+canvasRefactor.notes,references:noteRefactor.references+canvasRefactor.references};
   const limit = (await config()).features?.historyLimit;
   for (const change of changes) {
-    if (await fs.readFile(change.from,'utf8') !== change.previous) throw Error('工作区文件在更新引用时发生了变化，请重试。');
+    if (await fs.readFile(change.from,'utf8') !== change.previous) throw Error(tr("main.aWorkspaceFileChangedWhileLinksWere"));
     if (change.saved !== change.previous) await history().record(change.from,change.previous,limit);
   }
-  async function rename(source, target) {
-    if (!caseOnly) return fs.rename(source,target);
-    const temporary = path.join(folder,'.' + crypto.randomUUID());
-    await fs.rename(source,temporary);
-    try { await fs.rename(temporary,target); }
-    catch (error) { await fs.rename(temporary,source); throw error; }
-  }
-  const written = [];
-  await rename(from,to);
-  try {
-    for (const change of changes) {
-      if (change.previous !== change.saved) {
-        if (await fs.readFile(change.path,'utf8') !== change.previous) throw Error('工作区文件在更新引用时发生了变化，请重试。');
-        change.saved=normalizeLineEndings(change.path,change.saved);
-        await space.atomicWrite(change.path,change.saved);
-        written.push(change);
-      }
-      change.mtime = (await fs.stat(change.path)).mtimeMs;
-      if (change.path !== change.from) await history().relocate(change.from,change.path,limit);
+  const logged=await activity().refactor(type,from,to,changes,caseOnly?path.join(folder,'.calcite-tmp-'+crypto.randomUUID()):undefined);
+  const syncHistory=new GitEngine(root).history;
+  for(const change of changes){
+    const {raw,snapshot,mtime,needsLf}=await readSnapshot(change.path,md.test(change.path)?MAX_NOTE:MAX_CANVAS);
+    Object.assign(change,raw===change.saved?{mtime,snapshot,needsLf}:{mtime:null});
+    if(change.path!==change.from){
+      await history().relocate(change.from,change.path,limit);
+      await syncHistory.relocate(change.from,change.path).catch(()=>{});
     }
-  } catch (error) {
-    const rollback = await Promise.allSettled(written.map(change => space.atomicWrite(change.path,change.previous)));
-    try { await rename(to,from); }
-    catch (e) { throw Error(error.message + '。自动回滚失败：' + e.message); }
-    if (rollback.some(row => row.status === 'rejected')) throw Error(error.message + '。部分引用回滚失败，可在版本历史中恢复。');
-    throw error;
   }
-  await vault.internal({removed:[...directories,...canvases,...changes.filter(change=>change.path!==change.from).map(change=>change.from)],
-    directories:directories.map(move),written:changes.filter(change=>change.path!==change.from||change.previous!==change.saved)
-      .map(change=>({file:change.path,text:change.saved})).concat(canvases.map(file=>({file:move(file)})))});
-  return {path:to,tree:await vault.tree(),refactor,changes:changes.map(({previous,...change})=>change)};
+  const writtenMap=new Map();
+  for(const change of changes)if(change.path!==change.from||change.previous!==change.saved)
+    writtenMap.set(pathKey(change.path),{file:change.path,...(md.test(change.path)?{text:change.saved}:{})});
+  for(const file of canvases.map(move))if(!writtenMap.has(pathKey(file)))writtenMap.set(pathKey(file),{file});
+  await vault.internal({removed:[...new Set([...directories,...canvases,...changes.filter(change=>change.path!==change.from).map(change=>change.from)])],
+    directories:directories.map(move),written:[...writtenMap.values()]});
+  return {path:to,tree:await vault.tree(),refactor,activity:logged,changes:changes.map(({previous,...change})=>({
+    ...change,saved:normalizeLineEndings(change.path,change.saved)
+  }))};
+}));
+handleMain('activity:list',serialized(()=>activity().list()));
+handleMain('activity:empty',serialized(()=>activity().emptyTrash()));
+handleMain('activity:undo',serialized(async (_,id,token)=>{
+  const result=await activity().undo(id,token);
+  if(!result.activity)return result;
+  const removed=new Set(result.affected.filter(row=>row.from&&row.from!==row.path).map(row=>row.from));
+  if(result.from)for(const row of await vault.entriesWithin(result.from))removed.add(row.path);
+  const written=new Set(result.affected.map(row=>row.path)),directories=[];
+  async function scan(file){
+    const stat=await fs.lstat(file);
+    if(stat.isSymbolicLink())return;
+    if(stat.isDirectory()){
+      directories.push(file);
+      for(const item of await fs.readdir(file))if(!item.startsWith('.'))await scan(path.join(file,item));
+    }else if(documentType.test(file))written.add(file);
+  }
+  await scan(result.path);
+  await vault.internal({removed:[...removed],written:[...written].map(file=>({file})),directories});
+  return {...result,tree:await vault.tree()};
 }));
 handleMain('note-target', async (_, {source,destination,wiki}) => {
   if (!source&&!root) return null;
@@ -656,42 +732,51 @@ handleMain('workspace-links',async(_,{source,destinations,headings})=>{
 });
 handleMain('workspace-notes', async (_,scope,drafts) => (await vault.index())?.workspaceNotes(scope,drafts)??[]);
 const canvasName = name => {
-  if (typeof name !== 'string') throw Error('请输入画布名称。');
-  const value = space.validName(name.trim().replace(/\.canvas$/i,''));
-  return value+'.canvas';
+  if (typeof name !== 'string') throw Error(tr("main.enterANameForTheCanvas"));
+  const parts=name.trim().replaceAll('\\','/').split('/').filter(Boolean);
+  if(!parts.length)throw Error(tr("main.enterANameForTheCanvas"));
+  const last=space.validName(parts.pop().replace(/\.canvas$/i,''))+'.canvas';
+  return path.join(...parts.map(space.validName),last);
 };
 handleMain('canvas-files', async () => {
   if (!root) return [];
-  return (await fs.readdir(root,{withFileTypes:true}))
-    .filter(entry=>entry.isFile()&&!entry.name.startsWith('.')&&/\.canvas$/i.test(entry.name))
-    .map(entry=>entry.name).sort((a,b)=>a.localeCompare(b,'zh-CN',{numeric:true}));
+  const locale=getLocale();
+  return (await vault.entriesWithin(root))
+    .filter(entry=>!entry.children&&/\.canvas$/i.test(entry.path))
+    .map(entry=>path.relative(root,entry.path).replaceAll('\\','/'))
+    .sort((a,b)=>a.localeCompare(b,locale,{numeric:true}));
 });
 handleMain('canvas-read', async (_,name) => {
-  if (!root) throw Error('请先打开工作区。');
+  if (!root) throw Error(tr("gitSync.openAWorkspaceFirst"));
   const target = await workspaceEntry(path.join(root,canvasName(name)));
   const info = await fs.stat(target);
-  if (!info.isFile() || info.size>5*1024*1024) throw Error('画布文件不可用或超过 5 MB。');
+  if (!info.isFile() || info.size>5*1024*1024) throw Error(tr("main.theCanvasIsUnavailableOrExceeds5"));
   const text = await fs.readFile(target,'utf8');
   return {text,version:crypto.createHash('sha256').update(text).digest('hex')};
 });
 handleMain('canvas-save', serialized(async (_, {name,board,version}) => {
-  if (!root) throw Error('请先打开工作区。');
+  if (!root) throw Error(tr("gitSync.openAWorkspaceFirst"));
   const directory=await workspaceEntry(root,true);
-  const target=path.join(directory,canvasName(name));
-  if (!Array.isArray(board?.nodes)||!Array.isArray(board?.edges)) throw Error('画布格式不正确。');
+  const relativeTarget=canvasName(name);
+  const target=path.join(directory,relativeTarget);
+  if (!Array.isArray(board?.nodes)||!Array.isArray(board?.edges)) throw Error(tr("main.invalidCanvasFormat"));
   const text=JSON.stringify(board,null,2)+'\n';
-  if (Buffer.byteLength(text)>5*1024*1024) throw Error('画布超过 5 MB。');
+  if (Buffer.byteLength(text)>5*1024*1024) throw Error(tr("main.theCanvasExceeds5Mb"));
   if (version) {
     await workspaceEntry(target);
-    const previous = await fs.readFile(target,'utf8');
-    if (crypto.createHash('sha256').update(previous).digest('hex')!==version) throw Error('画布已被其他程序修改，请重新打开。');
-    await space.atomicWrite(target,text);
-  } else await fs.writeFile(target,text,{flag:'wx'});
-  return {name:path.basename(target),version:crypto.createHash('sha256').update(text).digest('hex')};
+    const expected=async()=>crypto.createHash('sha256').update(await fs.readFile(target,'utf8')).digest('hex')===version;
+    if (!await expected() || !await space.atomicWrite(target,text,expected)) throw Error(tr("main.theCanvasWasChangedByAnotherProgram"));
+  } else {
+    const parent=path.dirname(target);
+    if(parent!==directory)await workspaceEntry(parent,true);
+    await fs.writeFile(target,text,{flag:'wx'});
+  }
+  await vault.internal({written:[{file:target}]});
+  return {name:relativeTarget.replaceAll('\\','/'),version:crypto.createHash('sha256').update(text).digest('hex')};
 }));
 handleMain('features', (_, features) => saveConfig({features}));
 handleMain('history', async (_, note, id) => {
-  if(!path.isAbsolute(note))throw Error('文件路径无效。');
+  if(!path.isAbsolute(note))throw Error(tr("main.invalidFilePath"));
   const engine=inVault(note)?new GitEngine(root):null;
   if(engine)note=await engine.workspaceFile(note);
   if(engine&&id==='current'&&(await engine.history.list(note)).length)
@@ -704,7 +789,7 @@ handleMain('history', async (_, note, id) => {
 });
 handleMain('attachment', serialized(async (_, {note, strategy, directory, mime, bytes}) => {
   const ext = {'image/png':'png','image/jpeg':'jpg','image/gif':'gif','image/webp':'webp','image/avif':'avif','image/bmp':'bmp','image/svg+xml':'svg'}[mime];
-  if (!ext || !bytes?.byteLength || bytes.byteLength > 32*1024*1024) throw Error('请选择小于 32 MB 的 PNG、JPEG、GIF、WebP、AVIF 或 BMP 图片。');
+  if (!ext || !bytes?.byteLength || bytes.byteLength > 32*1024*1024) throw Error(tr("main.selectAPngJpegGifWebpAvif"));
   note = await check(note);
   const parent = path.dirname(note);
   const anchor = strategy === 'workspace' && root && space.within(root,note) ? root : parent;
@@ -715,26 +800,26 @@ handleMain('attachment', serialized(async (_, {note, strategy, directory, mime, 
     folder = path.join(folder,part);
     await fs.mkdir(folder).catch(e => {if(e.code!=='EEXIST')throw e;});
     const stat = await fs.lstat(folder);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('附件目录包含符号链接或同名文件。');
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error(tr("main.theAttachmentsFolderContainsASymlinkOr"));
   }
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g,'');
   const target = path.join(folder,stamp + '-' + crypto.randomUUID().slice(0,8) + '.' + ext);
   const image=Buffer.from(bytes);
-  if (!validImage(mime,image)) throw Error('图片内容与格式不匹配。');
+  if (!validImage(mime,image)) throw Error(tr("main.theImageContentsDoNotMatchIts"));
   await fs.writeFile(target,image,{flag:'wx'});
   if(inVault(target))gitSync.arm();
   return space.encode(path.relative(parent,target));
 }));
 handleMain('attachments:scan',serialized(async(_,drafts=[])=>{
-  if(!root)throw Error('请先打开工作区。');
+  if(!root)throw Error(tr("gitSync.openAWorkspaceFirst"));
   return orphanPictures(root,{index:await vault.index(),drafts});
 }));
 handleMain('attachments:trash',serialized(async(_,{paths,drafts=[]})=>{
-  if(!root)throw Error('请先打开工作区。');
+  if(!root)throw Error(tr("gitSync.openAWorkspaceFirst"));
   const permitted=new Set((await orphanPictures(root,{drafts,verify:true})).map(row=>pathKey(row.path)));
   const files=[];
   for(const file of new Set(paths)) {
-    if(!inVault(file)||!imageExtension.test(file)||!permitted.has(pathKey(file))) throw Error('附件已变化，请重新扫描后再清理。');
+    if(!inVault(file)||!imageExtension.test(file)||!permitted.has(pathKey(file))) throw Error(tr("main.attachmentsChangedScanThemAgainBeforeCleaning"));
     files.push(await workspaceEntry(file));
   }
   for(const file of files)await shell.trashItem(file);
@@ -742,8 +827,8 @@ handleMain('attachments:trash',serialized(async(_,{paths,drafts=[]})=>{
   return files.length;
 }));
 handleMain('export-document', async (_, {html,format,name,width=1000,scale=1}) => {
-  if (!['html','png'].includes(format)) throw Error('未知导出格式。');
-  const selected = await dialog.showSaveDialog(win,{defaultPath:name + '.' + format,filters:[{name:format.toUpperCase(),extensions:[format]}]});
+  if (!['html','png'].includes(format)) throw Error(tr("main.unknownExportFormat"));
+  const selected = await dialog.showSaveDialog(win,{title:tr('documentMenu.export'),defaultPath:name + '.' + format,filters:[{name:format.toUpperCase(),extensions:[format]}]});
   if (selected.canceled) return false;
   if (format === 'html') await fs.writeFile(selected.filePath,html,'utf8');
   else {
@@ -756,7 +841,7 @@ handleMain('export-document', async (_, {html,format,name,width=1000,scale=1}) =
         awaitPromise:true,returnByValue:true
       });
       const height = Math.max(1,result.value);
-      if (!Number.isFinite(height) || height*scale>30000 || width*height*scale*scale>48000000) throw Error('内容过长，请降低倍率、缩小选区或使用独立 HTML。');
+      if (!Number.isFinite(height) || height*scale>30000 || width*height*scale*scale>48000000) throw Error(tr("main.theContentIsTooLongLowerThe"));
       const capture=client.sendCommand('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,
         optimizeForSpeed:true,clip:{x:0,y:0,width,height,scale}});
       // A hidden static page may stop producing frames before Chromium requests the screenshot.
@@ -764,7 +849,7 @@ handleMain('export-document', async (_, {html,format,name,width=1000,scale=1}) =
       let deadline;
       try {
         const {data}=await Promise.race([capture,new Promise((_,reject)=>{
-          deadline=setTimeout(()=>reject(Error('长图渲染超时，请降低倍率或缩小导出范围后重试。')),20000);
+          deadline=setTimeout(()=>reject(Error(tr("main.imageRenderingTimedOutLowerTheScale"))),20000);
         })]);
         await fs.writeFile(selected.filePath,Buffer.from(data,'base64'));
       } finally {
@@ -779,13 +864,13 @@ handleMain('export-rich',async(_,{html,text})=>{clipboard.write({html,text});ret
 handleMain('export-markdown',serialized(async(_,{note,text,format})=>{
   note=await check(note);
   const filename=path.basename(note), name=filename.replace(md,'');
-  const selected=format==='zip'?await dialog.showSaveDialog(win,{defaultPath:name+'.zip',filters:[{name:'ZIP',extensions:['zip']}]}):
+  const selected=format==='zip'?await dialog.showSaveDialog(win,{title:tr('documentMenu.export'),defaultPath:name+'.zip',filters:[{name:'ZIP',extensions:['zip']}]}):
     await dialog.showOpenDialog(win,{properties:['openDirectory','createDirectory']});
   if(selected.canceled)return false;
   const document=await portableMarkdown({note,text,root:inVault(note)?root:'',
     readImage:file=>readLocalImage('note-image://local/'+encodeURIComponent(file))});
   if(format==='zip') {
-    if(!/\.zip$/i.test(selected.filePath))throw Error('请选择 .zip 文件。');
+    if(!/\.zip$/i.test(selected.filePath))throw Error(tr("main.selectAZipFile"));
     await space.atomicWrite(selected.filePath,Buffer.from(zipSync(Object.fromEntries([[filename,Buffer.from(document.text)],...document.entries]),{level:3})));
   } else {
     const folder=path.join(await fs.realpath(selected.filePaths[0]),space.validName(name+'-Markdown'));

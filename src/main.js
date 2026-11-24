@@ -1,22 +1,22 @@
+import {getLocale, t as tr} from "../shared/i18n/index.mjs";
+import {mountLocalizedMarkup, onLocaleChange} from "./localization.js";
 import { Crepe } from '@milkdown/crepe';
+import {blockLabels, editorPhrases, toolbarLabels} from './editor-language.js';
 import { replaceAll, $prose } from '@milkdown/kit/utils';
 import { editorViewCtx, serializerCtx } from '@milkdown/kit/core';
-import katexCSS from 'katex/dist/katex.min.css?raw';
 import '@milkdown/crepe/theme/common/style.css';
 import { EditorView, keymap, ViewPlugin } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import {indentMore,indentLess,undo,redo} from '@codemirror/commands';
-import {getCM,vim} from '@replit/codemirror-vim';
 import {formatTables,insertToc,numberHeadings,renumberList,toggleTasks} from './markdown-edit.js';
 import {defaultShortcuts,eventShortcut,keycaps,mountShortcuts} from './shortcuts.js';
 import {inlineMathView,mathOptions,parseMacros,refreshLiveMath} from './math-options.js';
-import {exportDefaults,exportStyle,htmlDocument,inlineRichStyles,organizeExport,showExportCenter} from './export-center.js';
-import {mountAttachments} from './attachments.js';
+import {exportDefaults} from './export-defaults.js';
 import {documentMenu,pathMenu} from './document-menu.js';
 import {createFloatingMenu,contextMenu} from './floating-menu.js';
 import {createSettingsCenter} from './settings-center.js';
 import {errorMessage} from './error-message.js';
-import {syncLabel,mountSyncSettings} from './sync-settings.js';
+import {syncLabel,syncMessage} from './sync-status.js';
 import {localTimestamp} from '../shared/local-time.mjs';
 import { basicSetup } from 'codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -26,7 +26,8 @@ import { openSearchPanel } from '@codemirror/search';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import 'katex/dist/katex.min.css';
-import { createIcons, icons } from 'lucide';
+import { createIcons } from 'lucide';
+import { appIcons as icons } from './icons.js';
 import './style.css';
 import './refinements.css';
 import './features.css';
@@ -39,15 +40,17 @@ import {showVaultManager,vaultStatusLabels} from './mobile-vault-manager.js';
 import {configured} from '../shared/core/sync-config.mjs';
 import {enterEmbed} from '../shared/core/transclusion.mjs';
 import {normalizeLineEndings} from '../shared/text-files.mjs';
-import {headingIndex,headingMatches,mapLinks,markdown as markdownPath} from '../shared/note-links.mjs';
+import {encodeWiki,headingIndex,headingMatches,mapLinks,markdown as markdownPath} from '../shared/note-links.mjs';
 import {replaceReference,splitReferenceBlock,updateReferenceDefinitions} from '../shared/core/link-refactor.mjs';
+import {sameSnapshot} from '../shared/core/file-snapshot.mjs';
 import {dailyNoteName,relativeNotePath,tagTree} from '../shared/pkm-workflows.mjs';
 import {randomId as uid} from './random-id.js';
 import { installOutline, installLinkCompletion, noteHeadings, sourceOutlineFolds } from './navigation.js';
-import { defaults, splitFrontmatter, propertiesCard, styleCallouts, liveNotesPlugin, liveWikiStatus, noteTags, noteExtension, diffView, pagebreakNode, remarkPagebreak } from './notes.js';
+import { defaults, splitFrontmatter, propertiesCard, styleCallouts, liveNotesPlugin, liveWikiStatus, noteTags, noteExtension, diffView, sideBySideDiff, pagebreakNode, remarkPagebreak } from './notes.js';
 import { installEditorTools } from './editor-tools.js';
 import { createWorkspaceUI } from './workspace-ui.js';
 import {renderNote,wrapReadingTables} from './note-render.js';
+import {createActivityView} from './activity-view.js';
 import {showExternalMarkdown} from './mobile-external-preview.js';
 import { createNoteWorkflows } from './note-workflows.js';
 import { createWorkspaceViews } from './workspace-views.js';
@@ -58,18 +61,70 @@ import {createVaultSearch} from './vault-search.js';
 
 const $ = s => document.querySelector(s);
 const escape = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const base = p => p?.split(/[\\/]/).pop() || '未命名.md';
+const base = p => p?.split(/[\\/]/).pop() || tr('main.untitledName');
 const icon = name => `<i data-lucide="${name}"></i>`;
 const desktop = platform.type==='electron';
 const nativeMobile=platform.type==='capacitor';
 const persisted=desktop||nativeMobile;
 const mac=platform.os==='darwin'||(!desktop&&/Mac/.test(navigator.platform));
 const vimConfig=new Compartment();
+const editorLanguage=new Compartment();
 const appearance = window.calciteAppearance;
 appearance.attach(platform.window,platform.events);
 const uiRoot = document.documentElement;
-const mathFonts=import.meta.glob('../node_modules/katex/dist/fonts/*.woff2',{eager:true,query:'?inline',import:'default'});
-const welcome = `# 给思考，一个安静的地方\n\n欢迎来到你的 **Calcite**。在这里，把零散的灵感写成清晰的笔记。\n\n> 本地文件，自由书写。让页面安静下来，专注于内容本身。\n\n## 从这里开始\n\n- 点击左下角 **打开文件夹**，管理你的 Markdown 知识库。\n- 使用 **Ctrl + O** 打开文档，**Ctrl + S** 保存。\n- 在右下角切换 **即时编辑 / 源码 / 阅读**。\n- 输入「/」插入标题、表格、引用和代码块。\n- 使用 **Ctrl + K** 快速打开文件或执行命令。\n\n## 为知识建立连接\n\n使用 [[使用指南]] 连接笔记。阅读模式下点击链接即可跳转；右侧会显示当前文档的大纲和反向链接。\n\n### 计划与清单\n\n- [x] 找到喜欢的写作环境\n- [ ] 写下今天的第一个想法\n- [ ] 让知识彼此连接\n\n### 清晰地表达\n\n| 模式 | 适合做什么 |\n| --- | --- |\n| 即时编辑 | 流畅写作，所见即所得 |\n| 源码 | 精确编辑 Markdown，查找替换 |\n| 阅读 | 公式、图表与完整排版 |\n\n### 公式与代码\n\n$$\nE = mc^2\n$$\n\n\`\`\`cpp\n#include <iostream>\nint main() {\n    std::cout << "Hello, ideas!" << std::endl;\n}\n\`\`\`\n\n---\n\n慢慢写，好的想法值得留下。\n`;
+const mathFonts=import.meta.glob('../node_modules/katex/dist/fonts/*.woff2',{query:'?inline',import:'default'});
+let vimModule,exportCenterModule;
+const loadVim=()=>vimModule?Promise.resolve(vimModule):import('@replit/codemirror-vim').then(mod=>(vimModule=mod));
+const loadExportCenter=()=>exportCenterModule?Promise.resolve(exportCenterModule):import('./export-center.js').then(mod=>(exportCenterModule=mod));
+const welcome = () => `${tr("main.aPlaceForYourNotes")}
+
+${tr("main.welcomeToCalciteStartANoteOr")}
+
+> ${tr("main.yourNotesAreSavedAsLocalFiles")}
+
+${tr("main.startHere")}
+
+${tr("main.selectOpenFolderToOpenYourMarkdown")}
+${tr("main.pressCtrlOToOpenANote")}
+${tr("main.switchBetweenLiveSourceAndReadAt")}
+${tr("main.typeToInsertHeadingsTablesQuotesOr")}
+${tr("main.pressCtrlKToOpenFilesOr")}
+
+${tr("main.connectYourNotes")}
+
+${tr("main.useUserGuideToLinkNotesFollow")}
+
+${tr("main.plansAndTasks")}
+
+${tr("main.xSetUpAWorkspace")}
+${tr("main.writeYourFirstNote")}
+${tr("main.linkTwoNotes")}
+
+${tr("main.chooseAnEditorView")}
+
+${tr("main.modeUseItTo")}
+| --- | --- |
+${tr("main.liveWriteWithInlineFormatting")}
+${tr("main.sourceEditAndSearchRawMarkdown")}
+${tr("main.readReadFormulasDiagramsAndFormattedNotes")}
+
+${tr("main.mathAndCode")}
+
+$$
+E = mc^2
+$$
+
+\`\`\`cpp
+#include <iostream>
+int main() {
+    std::cout << "Hello, ideas!" << std::endl;
+}
+\`\`\`
+
+---
+
+${tr("main.addYourOwnNotesWhenYouRe")}
+`;
 
 let tabs=[], activeId='', root='', files=[], mode='live', pane='files', autoSave=true, syncing=false, crepe, source, sessionTimer, saveTimers=new Map(), searchSerial=0, renderSerial=0, initialized=false;
 const vaultSearch=createVaultSearch(platform.index.searchSnapshot);
@@ -86,7 +141,7 @@ let treeSort = 'name', treeDescending = false;
 let loadingTree = false;
 let initialTreeChanges=[];
 let workspaceSettled;
-let mobileShell;
+let mobileShell,activityView;
 const mobileLayout=()=>nativeMobile||uiRoot.dataset.platform==='mobile';
 const mobileEditMode=()=>preferences.mobileLiveEditing?'live':'source';
 const supportedMode=mode=>mobileLayout()&&mode==='live'?mobileEditMode():mode;
@@ -96,138 +151,142 @@ const relativePath = path => {
   return root && normalized.toLocaleLowerCase().startsWith(prefix.toLocaleLowerCase())
     ? normalized.slice(prefix.length) : normalized;
 };
-const sortedTree = rows => [...rows].sort((a,b) =>
-  Number(!!b.children)-Number(!!a.children) ||
-  (treeDescending?-1:1)*((treeSort==='name'?0:(a[treeSort]||0)-(b[treeSort]||0)) ||
-    a.name.localeCompare(b.name,'zh-CN',{numeric:true})));
+const sortedTree = rows => {
+  const locale=getLocale();
+  return [...rows].sort((a,b) =>
+    Number(!!b.children)-Number(!!a.children) ||
+    (treeDescending?-1:1)*((treeSort==='name'?0:(a[treeSort]||0)-(b[treeSort]||0)) ||
+      a.name.localeCompare(b.name,locale,{numeric:true})));
+};
 const workspaceState = () => workspaces[root] ??= {bookmarks:[],bases:[]};
 const flat=(rows=files)=>rows.flatMap(r=>r.children?flat(r.children):[r]);
 const iconButton = (attr,label,glyph) => `<button type="button" ${attr} title="${label}" aria-label="${label}">${icon(glyph)}</button>`;
-const appearanceOptions = ()=>`<div class="appearance-choices" role="group" aria-label="晶曜工作台">
-  <button type="button" data-appearance-theme="dark">暗色</button>
-  <button type="button" data-appearance-theme="light">亮色</button>
+const appearanceOptions = ()=>`<div class="appearance-choices" role="group" aria-label="${tr("main.appearance")}">
+  <button type="button" data-appearance-theme="dark">${tr("main.dark")}</button>
+  <button type="button" data-appearance-theme="light">${tr("main.light")}</button>
 </div>`;
-document.querySelector('#app').innerHTML=`
+mountLocalizedMarkup($('#app'),()=>`
 <header class="titlebar">
-  ${iconButton('class="sidebar-toggle" data-action="sidebar" aria-controls="left-sidebar" aria-expanded="true"','切换左侧栏（Ctrl+B）','panel-left')}
-  <div class="tabs" id="tabs" aria-label="打开的文档"></div>
-  ${iconButton('class="add-tab" data-action="new"','新建文档（Ctrl+N）','plus')}
+  ${iconButton('class="sidebar-toggle" data-action="sidebar" aria-controls="left-sidebar" aria-expanded="true"',tr("main.toggleLeftSidebarCtrlB"),'panel-left')}
+  <div class="tabs" id="tabs" aria-label="${tr("main.openNotes")}"></div>
+  ${iconButton('class="add-tab" data-action="new"',tr("main.newNoteCtrlN"),'plus')}
   <div class="title-drag-space" aria-hidden="true"></div>
   <div class="title-actions">
-    ${iconButton('id="export-quick" data-action="exportCenter" disabled','打开导出中心','file-down')}
-    ${iconButton('id="split-quick" data-action="split" disabled','在右侧分栏打开','columns-2')}
-    ${iconButton('id="document-star" data-action="toggleBookmark" aria-pressed="false" disabled','收藏当前文档','star')}
-    ${iconButton('id="appearance-toggle" popovertarget="appearance-panel"','主题与材质','sun-moon')}
-    ${iconButton('data-action="more" aria-haspopup="menu" aria-controls="more-menu" aria-expanded="false"','更多文档操作','ellipsis')}
-    <div class="window-controls" role="group" aria-label="窗口控制" ${desktop?'':'hidden'}>
-      <button type="button" data-window-control="minimize" title="最小化" aria-label="最小化">${icon('minus')}</button>
-      <button type="button" data-window-control="maximize" title="最大化" aria-label="最大化"><span aria-hidden="true">${icon('square')}</span><span aria-hidden="true" hidden>${icon('copy')}</span></button>
-      <button type="button" data-window-control="close" title="关闭窗口" aria-label="关闭窗口">${icon('x')}</button>
+    ${iconButton('id="export-quick" data-action="exportCenter" disabled',tr("main.openExportCenter"),'file-down')}
+    ${iconButton('id="split-quick" data-action="split" disabled',tr("main.openInRightSplit"),'columns-2')}
+    ${iconButton('id="document-star" data-action="toggleBookmark" aria-pressed="false" disabled',tr("main.bookmarkCurrentNote"),'star')}
+    ${iconButton('id="appearance-toggle" popovertarget="appearance-panel"',tr("main.themeMaterial"),'sun-moon')}
+    ${iconButton('data-action="more" aria-haspopup="menu" aria-controls="more-menu" aria-expanded="false"',tr("main.moreNoteActions"),'ellipsis')}
+    <div class="window-controls" role="group" aria-label="${tr("main.windowControls")}" ${desktop?'':'hidden'}>
+      <button type="button" data-window-control="minimize" title="${tr("main.minimize")}" aria-label="${tr("main.minimize")}">${icon('minus')}</button>
+      <button type="button" data-window-control="maximize" title="${tr("main.maximize")}" aria-label="${tr("main.maximize")}"><span aria-hidden="true">${icon('square')}</span><span aria-hidden="true" hidden>${icon('copy')}</span></button>
+      <button type="button" data-window-control="close" title="${tr("main.closeWindow")}" aria-label="${tr("main.closeWindow")}">${icon('x')}</button>
     </div>
   </div>
 </header>
 <main class="workspace">
-<aside class="sidebar" id="left-sidebar" aria-label="工作区侧栏">
+<aside class="sidebar" id="left-sidebar" aria-label="${tr("main.workspaceSidebar")}">
   <div class="vault-bar"><details class="workspace-picker">
-    <summary title="切换知识库" aria-controls="workspace-menu">${icon('folder-open')}<b id="workspace-name">本地工作区</b>${icon('chevrons-up-down')}</summary>
-  </details>${iconButton('id="settings-toggle" data-action="settings" aria-haspopup="dialog"','设置中心','settings')}</div>
-  <nav class="side-tools" aria-label="工作区工具">
-    ${iconButton('data-pane="files"','文件','folder-closed')}
-    ${iconButton('class="command-hint" data-action="palette"','搜索文件和命令（Ctrl+K）','search')}
-    ${iconButton('data-pane="search"','全文搜索（Ctrl+Shift+F）','text-search')}
-    ${iconButton('data-action="graph"','全库图谱','network')}
-    ${iconButton('data-pane="links"','当前文档的链接','link-2')}
-    ${iconButton('data-pane="tags"','标签索引','tags')}
-    ${iconButton('data-action="bookmarks"','书签','bookmark')}
+    <summary title="${tr("main.switchVault")}" aria-controls="workspace-menu">${icon('folder-open')}<b id="workspace-name">${tr("main.localWorkspace")}</b>${icon('chevrons-up-down')}</summary>
+  </details>${iconButton('id="settings-toggle" data-action="settings" aria-haspopup="dialog"',tr("main.settings"),'settings')}</div>
+  <nav class="side-tools" aria-label="${tr("main.workspaceTools")}">
+    ${iconButton('data-pane="files"',tr("main.files"),'folder-closed')}
+    ${iconButton('class="command-hint" data-action="palette"',tr("main.searchFilesAndCommandsCtrlK"),'search')}
+    ${iconButton('data-pane="search"',tr("main.fullTextSearchCtrlShiftF"),'text-search')}
+    ${iconButton('data-action="graph"',tr("main.vaultGraph"),'network')}
+    ${iconButton('data-pane="links"',tr("main.currentNoteLinks"),'link-2')}
+    ${iconButton('data-pane="tags"',tr("main.tagIndex"),'tags')}
+    ${iconButton('data-action="bookmarks"',tr("main.bookmark"),'bookmark')}
+    ${iconButton('data-action="activity"',tr("activity.title"),'history')}
   </nav>
   <div class="side-heading">
     <span id="pane-title" hidden></span>
-    <div class="side-heading-actions side-note-actions" aria-label="知识库操作">
-      ${iconButton('data-pane="health"','知识库体检','heart-pulse')}
-      ${iconButton('data-action="daily"','打开今日笔记','calendar-days')}
-      ${iconButton('data-action="random"','随机打开笔记','shuffle')}
+    <div class="side-heading-actions side-note-actions" aria-label="${tr("main.vaultActions")}">
+      ${iconButton('data-pane="health"',tr("main.vaultCheck"),'heart-pulse')}
+      ${iconButton('data-action="daily"',tr("main.openDailyNote"),'calendar-days')}
+      ${iconButton('data-action="random"',tr("main.openRandomNote"),'shuffle')}
     </div>
-    <div class="side-heading-actions side-file-actions" role="toolbar" aria-label="文件操作">
-      <button id="file-sort" type="button" title="文件排序" aria-label="文件排序" disabled>${icon('arrow-down-up')}</button>
-      ${iconButton('data-action="refresh"','刷新文件列表','refresh-cw')}
-      ${iconButton('data-action="new"','新建文档（Ctrl+N）','file-plus-2')}
-      <button type="button" id="new-folder" title="新建文件夹" aria-label="新建文件夹" disabled>${icon('folder-plus')}</button>
+    <div class="side-heading-actions side-file-actions" role="toolbar" aria-label="${tr("main.fileActions")}">
+      <button id="file-sort" type="button" title="${tr("main.sortFiles")}" aria-label="${tr("main.sortFiles")}" disabled>${icon('arrow-down-up')}</button>
+      ${iconButton('data-action="refresh"',tr("main.refreshFiles"),'refresh-cw')}
+      ${iconButton('data-action="new"',tr("main.newNoteCtrlN"),'file-plus-2')}
+      <button type="button" id="new-folder" title="${tr("main.newFolder")}" aria-label="${tr("main.newFolder")}" disabled>${icon('folder-plus')}</button>
     </div>
   </div>
   <div id="side-content"></div>
-    <div class="workspace-menu" id="workspace-menu" popover="manual" aria-label="知识库">
+    <div class="workspace-menu" id="workspace-menu" popover="manual" aria-label="${tr("main.vault")}">
       <p id="workspace-path" hidden></p>
       <div id="recent-vaults"></div>
-      <button data-action="folder">${icon('folder-open')} ${nativeMobile?'管理本地 Vault':'打开工作区文件夹…'}</button>
-      <button data-action="close-vault" hidden>${icon('folder-closed')} 关闭工作区文件夹</button>
-      <button data-action="theme">${icon('sun-moon')} 切换明暗主题</button>
-      <button data-action="help">${icon('keyboard')} 使用指南与快捷键</button>
+      <button data-action="folder">${icon('folder-open')} ${nativeMobile?tr("main.manageLocalVaults"):tr("main.openWorkspaceFolder")}</button>
+      <button data-action="close-vault" hidden>${icon('folder-closed')} ${tr("main.closeWorkspaceFolder")}</button>
+      <button data-action="theme">${icon('sun-moon')} ${tr("main.toggleLightAndDark")}</button>
+      <button data-action="help">${icon('keyboard')} ${tr("main.guideShortcuts")}</button>
     </div>
 </aside>
 <section class="editor-section">
-  <aside id="external-change" class="external-change" aria-label="文件变更提示" hidden></aside>
-  <aside id="sync-conflict-banner" class="external-change" hidden><span role="status">同步已保留冲突副本。</span><button type="button" data-sync-conflict>查看同步冲突</button></aside>
+  <aside id="external-change" class="external-change" aria-label="${tr("main.externalFileChanges")}" hidden></aside>
+  <aside id="sync-conflict-banner" class="external-change" hidden><span role="status">${tr("main.syncKeptAConflictCopy")}</span><button type="button" data-sync-conflict>${tr("main.viewSyncConflicts")}</button></aside>
   <div class="paper-material" aria-hidden="true"></div>
-  <nav class="breadcrumb" aria-label="当前文档路径">
+  <nav class="breadcrumb" aria-label="${tr("main.currentNotePath")}">
     <div class="breadcrumb-path"><span id="breadcrumb-root"></span>${icon('chevron-right')}<button type="button" id="document-name" aria-current="page" data-breadcrumb-file></button></div>
   </nav>
   <div class="document-scroll" id="live-scroll"><div id="live-properties"></div><div id="live-editor"></div></div>
   <div id="source-editor" hidden></div>
   <article id="reading" class="document-scroll prose" hidden></article>
-  <div id="empty" hidden><button data-action="new">新建文档 <kbd>Ctrl N</kbd></button><button data-action="open">打开文档 <kbd>Ctrl O</kbd></button>
-    <button class="mobile-empty" data-action="mobile-new-note">新建笔记</button></div>
+  <div id="empty" hidden><button data-action="new">${tr("main.newNote")} <kbd>Ctrl N</kbd></button><button data-action="open">${tr("main.openNote2")} <kbd>Ctrl O</kbd></button>
+    <button class="mobile-empty" data-action="mobile-new-note">${tr("main.newNote2")}</button></div>
 </section>
 <div id="split-divider" hidden aria-hidden="true"></div>
 <aside id="split-pane" hidden>
   <div class="paper-material" aria-hidden="true"></div>
   <div class="split-toolbar">
-    <select aria-label="右侧笔记"></select>
-    <select data-split-mode aria-label="右侧显示模式"><option value="read">阅读</option><option value="source">源码</option></select>
-    <button type="button" data-split-save title="保存右侧笔记" aria-label="保存右侧笔记">${icon('save')}</button>
-    <button type="button" data-split-close title="关闭分栏" aria-label="关闭分栏">${icon('x')}</button>
+    <select aria-label="${tr("main.rightNote")}"></select>
+    <select data-split-mode aria-label="${tr("main.rightViewMode")}"><option value="read">${tr("main.read")}</option><option value="source">${tr("main.source")}</option></select>
+    <button type="button" data-split-save title="${tr("main.saveRightNote")}" aria-label="${tr("main.saveRightNote")}">${icon('save')}</button>
+    <button type="button" data-split-close title="${tr("main.closeSplit")}" aria-label="${tr("main.closeSplit")}">${icon('x')}</button>
   </div>
-  <span data-split-status></span><textarea hidden aria-label="右侧 Markdown 源码"></textarea><article class="prose"></article>
+  <span data-split-status></span><textarea hidden aria-label="${tr("main.rightMarkdownSource")}"></textarea><article class="prose"></article>
 </aside>
-<aside class="outline-panel" id="right-sidebar" aria-label="大纲和反链">
+<aside class="outline-panel" id="right-sidebar" aria-label="${tr("main.outlineBacklinks")}">
   <div class="inspector-header">
-    <div class="inspector-tabs segmented-control" role="tablist" aria-label="右侧栏内容">
-      <button type="button" role="tab" id="outline-tab" aria-controls="outline-view" aria-selected="true">大纲</button>
-      <button type="button" role="tab" id="backlinks-tab" aria-controls="backlinks-view" aria-selected="false" tabindex="-1">反链 <span class="link-count">(<span id="backlink-count">0</span>)</span></button>
+    <div class="inspector-tabs segmented-control" role="tablist" aria-label="${tr("main.rightSidebarContent")}">
+      <button type="button" role="tab" id="outline-tab" aria-controls="outline-view" aria-selected="true">${tr("main.outline")}</button>
+      <button type="button" role="tab" id="backlinks-tab" aria-controls="backlinks-view" aria-selected="false" tabindex="-1">${tr("main.backlinks")} <span class="link-count">(<span id="backlink-count">0</span>)</span></button>
     </div>
-    ${iconButton('data-action="outline" aria-controls="right-sidebar" aria-expanded="true"','收起右侧栏','panel-right-close')}
+    ${iconButton('data-action="outline" data-desktop-inspector-toggle aria-controls="right-sidebar" aria-expanded="true"',tr("main.collapseRightSidebar"),'panel-right-close')}
   </div>
   <div class="inspector-view" id="outline-view" role="tabpanel" aria-labelledby="outline-tab">
-    <div class="outline-search">${icon('search')}<input id="outline-filter" type="search" placeholder="筛选标题" aria-label="筛选标题"></div><div id="outline"></div>
+    <div class="outline-search">${icon('search')}<input id="outline-filter" type="search" placeholder="${tr("main.filterHeadings")}" aria-label="${tr("main.filterHeadings")}"></div><div id="outline"></div>
   </div>
   <div class="inspector-view" id="backlinks-view" role="tabpanel" aria-labelledby="backlinks-tab" hidden><div id="backlinks"></div></div>
 </aside></main>
 <footer>
-  <div class="save-status"><span class="status-dot"></span><span id="save-state">准备就绪</span><button type="button" id="auto-save" data-action="autosave" aria-pressed="true" ${desktop?'':'hidden'}>自动保存：开</button></div>
+  <div class="save-status"><span class="status-dot"></span><span id="save-state">${tr("main.ready")}</span><button type="button" id="auto-save" data-action="autosave" aria-pressed="true" ${desktop?'':'hidden'}>${tr("main.autoSaveOn")}</button></div>
   <div class="document-status">
-    <div class="document-metrics"><span id="vim-mode" role="status" hidden>NORMAL</span><span id="word-count">0 字</span><span id="read-time">1 分钟阅读</span></div>
-    <div class="mode-switch segmented-control" role="group" aria-label="文档模式">
-      <button data-mode="live" title="即时编辑">即时编辑</button>
-      <button data-mode="source" title="源码">源码</button>
-      <button data-mode="read" title="阅读">阅读</button>
+    <div class="document-metrics"><span id="vim-mode" role="status" hidden>NORMAL</span><span id="word-count">${tr("main.0Characters")}</span><span id="read-time">${tr("main.1MinRead")}</span></div>
+    <div class="mode-switch segmented-control" role="group" aria-label="${tr("main.noteMode")}">
+      <button data-mode="live" title="${tr("main.live")}">${tr("main.live")}</button>
+      <button data-mode="source" title="${tr("main.source")}">${tr("main.source")}</button>
+      <button data-mode="read" title="${tr("main.read")}">${tr("main.read")}</button>
     </div>
     <div class="status-tools">
-      <button type="button" id="sync-status" aria-controls="sync-popover" aria-haspopup="dialog" ${desktop?'':'hidden'}>未开启</button>
-      ${iconButton('data-action="focus" aria-pressed="false"','专注模式（F8）','scan')}
-      ${iconButton('data-action="outline" aria-controls="right-sidebar" aria-expanded="true"','切换右侧栏','panel-right')}
+      <button type="button" id="sync-status" aria-controls="sync-popover" aria-haspopup="dialog" ${desktop?'':'hidden'}>${tr("main.off")}</button>
+      ${iconButton('data-action="focus" aria-pressed="false"',tr("main.focusModeF8"),'scan')}
+      ${iconButton('data-action="outline" aria-controls="right-sidebar" aria-expanded="true"',tr("main.toggleRightSidebar"),'panel-right')}
     </div>
   </div>
 </footer>
-<section id="sync-popover" class="sync-popover" role="dialog" aria-label="同步状态" popover>
-  <p role="status"></p><progress aria-label="同步进度" hidden></progress>
-  <div class="feature-buttons"><button type="button" data-sync-now>立即同步</button>
-    <button type="button" data-sync-qr>配对二维码</button><button type="button" data-action="sync">同步设置</button></div>
-  <figure hidden><img alt="配对二维码" width="176" height="176"><button type="button" data-copy-pair>复制配对串</button></figure>
+<section id="sync-popover" class="sync-popover" role="dialog" aria-label="${tr("main.syncStatus")}" popover>
+  <p role="status"></p><progress aria-label="${tr("main.syncProgress")}" hidden></progress>
+  <div class="feature-buttons"><button type="button" data-sync-now>${tr("main.syncNow")}</button>
+    <button type="button" data-sync-qr>${tr("main.pairingQrCode")}</button><button type="button" data-action="sync">${tr("main.syncSettings")}</button></div>
+  <figure hidden><img alt="${tr("main.pairingQrCode")}" width="176" height="176"><button type="button" data-copy-pair>${tr("main.copyPairingCode")}</button></figure>
 </section>
-<section id="appearance-panel" popover aria-label="主题与材质">
+<section id="appearance-panel" popover aria-label="${tr("main.themeMaterial")}">
   ${appearanceOptions()}
 </section>
 <div id="toast" role="status"></div>
-<div class="modal-shade" id="palette" hidden><div class="palette" role="dialog" aria-label="搜索文档或命令"><div class="palette-input">${icon('search')}<input id="command-input" aria-label="搜索文件或命令" placeholder="搜索文件，或输入 > 执行命令" autocomplete="off"><kbd>Esc</kbd></div><div id="command-results"></div><div class="palette-footer">↑ ↓ 选择　Enter 打开</div></div></div>`;
+<div class="modal-shade" id="palette" hidden><div class="palette" role="dialog" aria-label="${tr("main.findNotesOrCommands")}"><div class="palette-input">${icon('search')}<input id="command-input" aria-label="${tr("main.findFilesOrCommands")}" placeholder="${tr("main.findFilesOrType")} > ${tr("main.forCommands")}" autocomplete="off"><kbd>Esc</kbd></div><div id="command-results"></div><div class="palette-footer">${tr("main.selectEnterOpen")}</div></div></div>`);
 function glyphs(){createIcons({icons,attrs:{'stroke-width':1.65}});}
 glyphs();
 const appearancePanel = $('#appearance-panel');
@@ -300,13 +359,28 @@ $('.window-controls').addEventListener('click', event => {
 });
 platform.events.windowState(maximized => {
   const button = $('[data-window-control="maximize"]');
-  const label = maximized ? '还原窗口' : '最大化';
+  const label = maximized ? tr("main.restoreWindow") : tr("main.maximize");
   button.title = label;
   button.setAttribute('aria-label', label);
   button.firstElementChild.hidden = maximized;
   button.lastElementChild.hidden = !maximized;
 });
-function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').classList.remove('show'),3600);}
+function toast(message,actions=[]) {
+  const node=$('#toast');
+  node.textContent=message;
+  for(const action of Array.isArray(actions)?actions:[]){
+    const button=document.createElement('button');
+    button.type='button';
+    button.textContent=action.label;
+    button.onclick=()=>Promise.resolve().then(action.run).catch(fail);
+    node.append(button);
+  }
+  node.classList.add('show');
+  node.classList.toggle('has-actions',node.querySelector('button')!==null);
+  node.inert=false;
+  clearTimeout(toast.timer);
+  toast.timer=setTimeout(()=>{node.classList.remove('show');node.inert=true;},node.classList.contains('has-actions')?9500:3600);
+}
 function fail(error){toast(errorMessage(error));console.error(error);}
 const floatingMenus=createFloatingMenu({fail,onOpen(){
   $('.workspace-picker').open=false;
@@ -347,7 +421,10 @@ function composeLive(text,markdown){
   return prefix+(suffix?markdown.trimEnd()+'\n\n'+suffix+'\n':markdown);
 }
 async function mountEditors(){
- crepe=new Crepe({root:$('#live-editor'),defaultValue:'',featureConfigs:{'code-mirror':{theme:oneMonokai},latex:{get katexOptions(){return mathOptions(preferences.macros);}},'placeholder':{text:'写下你的想法，或输入 / 插入内容…'},'image-block':{onUpload:file=>editorTools.upload(file)}}});
+ crepe=new Crepe({root:$('#live-editor'),defaultValue:'',featureConfigs:{'code-mirror':{theme:oneMonokai},
+   latex:{get katexOptions(){return mathOptions(preferences.macros);}},
+   'block-edit':blockLabels,toolbar:toolbarLabels,'link-tooltip':{get inputPlaceholder(){return tr('editor.placeholderUrl');}},
+   placeholder:{text:tr("main.writeSomethingOrTypeToInsert")},'image-block':{onUpload:file=>editorTools.upload(file)}}});
  crepe.editor.use($prose(()=>liveNotesPlugin((host,destination)=>{
    const path=current()?.path;
    if(path)embedCard(destination,path,new Set([fileKey(path)]),0,{remaining:48},preferences)
@@ -357,13 +434,27 @@ async function mountEditors(){
  crepe.editor.use($prose(()=>inlineMathView(()=>preferences.macros)));
  crepe.on(listener=>listener.markdownUpdated((ctx,md)=>{const doc=ctx.get(editorViewCtx).state.doc;if(!syncing&&mode==='live'&&doc!==liveDoc){liveDoc=doc;updateText(composeLive(current()?.text||'',md));}}));
  await crepe.create();
+ if(preferences.vim&&!mobileLayout())await loadVim();
  sourceExtensions=[keymap.of([{key:'Enter',run:continueNumberedList}]),basicSetup,markdown({base:markdownLanguage,codeLanguages:languages}),oneMonokai,sourceMarkers,sourceOutlineFolds,EditorView.lineWrapping,EditorView.scrollMargins.of(()=>({top:$('.breadcrumb').offsetHeight})),EditorView.updateListener.of(u=>{if(u.docChanged)updateText(u.state.doc.toString());})];
- source=new EditorView({state:EditorState.create({doc:'',extensions:[vimConfig.of(vimExtensions()),...sourceExtensions]}),parent:$('#source-editor')});
+ source=new EditorView({state:sourceEditorState(''),parent:$('#source-editor')});
+}
+function sourceEditorState(doc){
+  return EditorState.create({doc,extensions:[vimConfig.of(vimExtensions()),editorLanguage.of(editorPhrases()),...sourceExtensions]});
+}
+function relocalizeEditors(){
+  const effects=editorLanguage.reconfigure(editorPhrases());
+  for(const tab of tabs)if(tab.sourceState)tab.sourceState=tab.sourceState.update({effects}).state;
+  source?.dispatch({effects});
+  if(crepe){
+    crepe.editor.action(ctx=>ctx.update('placeholderConfigCtx',config=>({...config,text:tr("main.writeSomethingOrTypeToInsert")})));
+    const view=liveView();
+    view.dispatch(view.state.tr);
+  }
 }
 function vimExtensions() {
-  return preferences.vim&&!mobileLayout()?[vim(),ViewPlugin.fromClass(class {
+  return preferences.vim&&!mobileLayout()&&vimModule?[vimModule.vim(),ViewPlugin.fromClass(class {
     constructor(view) {
-      this.cm=getCM(view);
+      this.cm=vimModule.getCM(view);
       this.updateBadge=({mode})=>{$('#vim-mode').textContent=String(mode||'normal').toUpperCase();};
       this.cm?.on('vim-mode-change',this.updateBadge);
       this.updateBadge({mode:'normal'});
@@ -371,13 +462,18 @@ function vimExtensions() {
     destroy(){this.cm?.off('vim-mode-change',this.updateBadge);}
   })]:[];
 }
-function updateVim() {
-  $('#vim-mode').hidden=mobileLayout()||mode!=='source'||!preferences.vim;
+async function updateVim() {
+  const active=Boolean(preferences.vim&&!mobileLayout());
+  if(active&&!vimModule){
+    await loadVim();
+    if(!preferences.vim||mobileLayout())return;
+  }
   source?.dispatch({effects:vimConfig.reconfigure(vimExtensions())});
   for(const tab of tabs) delete tab.sourceState;
+  $('#vim-mode').hidden=!active||mode!=='source';
 }
 function continueNumberedList(view) {
-  if (preferences.vim&&getCM(view)?.state?.vim?.insertMode===false) return false;
+  if (preferences.vim&&vimModule?.getCM(view)?.state?.vim?.insertMode===false) return false;
   const range=view.state.selection.main,line=view.state.doc.lineAt(range.from);
   const match=view.state.sliceDoc(line.from,range.from).match(/^([ \t]*)(\d{1,8})([.)])([ \t]+)(\S.*)$/);
   if(!range.empty||!match||!view.state.doc.sliceString(line.from,range.from).trim())return false;
@@ -404,13 +500,13 @@ function syncEditors(){
         liveDoc = null;
         mode = 'source';
         if (tab) tab.viewMode = mode;
-        toast('即时编辑无法渲染此文档，已切换到源码。');
+        toast(tr("main.liveEditingCouldNotRenderThisNote"));
         console.warn(error);
       }
     }
     if (mode==='source') {
       const text = tab?.text||'';
-      source.setState(tab?.sourceState?.doc.toString()===text ? tab.sourceState : EditorState.create({doc:text,extensions:[vimConfig.of(vimExtensions()),...sourceExtensions]}));
+      source.setState(tab?.sourceState?.doc.toString()===text ? tab.sourceState : sourceEditorState(text));
     }
   } finally {syncing=false;}
   showMode();
@@ -424,9 +520,9 @@ function renderTabs(){
     const selected = tab.id===activeId;
     return `<div class="tab${selected?' active':''}${tab.dirty?' dirty':''}" data-tab="${escape(tab.id)}" ${tab.deleted?'data-deleted':tab.conflict?'data-conflict':''} draggable="true">
       <button type="button" class="tab-label" ${selected?'aria-current="true"':''} title="${escape(tab.path||tab.name)}">${icon(tab.pinned?'pin':'file-text')}<span>${escape(tab.name)}</span></button>
-      <span class="tab-unsaved" ${tab.dirty?'aria-label="有未保存的修改"':'hidden'}></span>
-      ${tab.deleted?'<span class="tab-file-state">已删除</span>':tab.conflict?'<span class="tab-file-state">外部修改</span>':''}
-      <button type="button" data-close="${escape(tab.id)}" aria-label="关闭 ${escape(tab.name)}" title="关闭文档">${icon('x')}</button>
+      <span class="tab-unsaved" ${tab.dirty?`aria-label="${tr("canvasView.unsavedChanges")}"`:'hidden'}></span>
+      ${tab.deleted?`<span class="tab-file-state">${tr("main.deleted")}</span>`:tab.conflict?`<span class="tab-file-state">${tr("main.externalChange")}</span>`:''}
+      <button type="button" data-close="${escape(tab.id)}" aria-label="${tr("main.close")} ${escape(tab.name)}" title="${tr("main.closeNote")}">${icon('x')}</button>
     </div>`;
   }).join('');
   bar.scrollLeft = scrollLeft;
@@ -461,7 +557,7 @@ function revealTab(bar,tab=bar.querySelector('.tab.active')) {
 }
 function renderBreadcrumb(tab) {
   const documentName = $('#document-name');
-  documentName.textContent = tab?.name||'未打开文档';
+  documentName.textContent = tab?.name||tr("main.noNoteOpen");
   documentName.title = tab?.path||tab?.name||'';
   documentName.disabled = !tab?.path;
   const container = $('#breadcrumb-root');
@@ -469,7 +565,7 @@ function renderBreadcrumb(tab) {
   const parent = relative && relative!==tab.path.replaceAll('\\','/') ? relative.split('/').slice(0,-1) : [];
   if (!root) {
     delete container.dataset.path;
-    container.textContent = '个人空间';
+    container.textContent = tr("main.personalSpace");
     return;
   }
   let folder = root.replaceAll('\\','/');
@@ -483,7 +579,7 @@ function renderBreadcrumb(tab) {
   }
   container.innerHTML = segments.join('<span class="breadcrumb-divider" aria-hidden="true"> / </span>');
 }
-function stats(){drawSyncConflict();const t=current(),text=t?.text||'';const words=(text.match(/[\u3400-\u9fff]/g)||[]).length+(text.replace(/[\u3400-\u9fff]/g,' ').match(/[\p{L}\p{N}]+/gu)||[]).length;$('#word-count').textContent=`${words.toLocaleString()} 字`;$('#read-time').textContent=`${Math.max(1,Math.ceil(words/400))} 分钟阅读`;$('footer').dataset.saved=Boolean(t?.path&&!t.dirty&&!t.deleted&&!t.conflict);$('#save-state').textContent=!desktop?'浏览器预览':t?.deleted?'磁盘文件已删除':t?.conflict?'有外部修改':t?.holdAutoSave?'已保留草稿 · 待手动保存':t?.dirty?(t.path?'有未保存的修改':'未保存的文档'):(t?.path?'已保存到本地':'本地草稿 · 已恢复保护');$('#auto-save').textContent=`自动保存：${autoSave?'开':'关'}`;$('#auto-save').setAttribute('aria-pressed',autoSave);}
+function stats(){drawSyncConflict();const t=current(),text=t?.text||'';const words=(text.match(/[\u3400-\u9fff]/g)||[]).length+(text.replace(/[\u3400-\u9fff]/g,' ').match(/[\p{L}\p{N}]+/gu)||[]).length;$('#word-count').textContent=tr("main.characters",{arg1:words.toLocaleString()});$('#read-time').textContent=tr("main.minRead",{arg1:Math.max(1,Math.ceil(words/400))});$('footer').dataset.saved=Boolean(t?.path&&!t.dirty&&!t.deleted&&!t.conflict);$('#save-state').textContent=!desktop?tr("main.browserPreview"):t?.deleted?tr("main.fileDeletedFromDisk"):t?.conflict?tr("main.externalChanges"):t?.holdAutoSave?tr("main.draftKeptSaveManually"):t?.dirty?(t.path?tr("canvasView.unsavedChanges"):tr("main.unsavedNote")):(t?.path?tr("main.savedLocally"):tr("main.localDraftRecovered"));$('#auto-save').textContent=tr("main.autoSave",{arg1:autoSave?tr("main.onShort"):tr("main.offShort")});$('#auto-save').setAttribute('aria-pressed',autoSave);}
 let headingText, headingRows = [];
 function headings() {
   const text = current()?.text || '';
@@ -525,7 +621,7 @@ function renderSide(){
  $('.sidebar').dataset.paneView=pane;
  const title=$('#pane-title');
  title.hidden=pane==='files';
- title.textContent={files:'',search:'搜索知识库',links:'笔记链接',tags:'标签索引',health:'知识库体检'}[pane];
+ title.textContent={files:'',search:tr("main.searchVault"),links:tr("main.noteLinks"),tags:tr("main.tagIndex"),health:tr("main.vaultCheck")}[pane];
  const newFolder = $('#new-folder');
  newFolder.hidden = pane !== 'files';
  newFolder.disabled = !root;
@@ -541,9 +637,9 @@ function renderSide(){
  if (pane === 'search') {
    const filter=(id,label,checked)=>
      `<button type="button" class="lg-chip" id="${id}" aria-pressed="${Boolean(checked)}">${label}</button>`;
-   $('#side-content').innerHTML = `<div class="search-box">${icon('search')}<input id="workspace-search" aria-label="搜索工作区" placeholder="搜索文件内容…" value="${escape(renderSide.query||'')}"></div>
-   <div class="search-options">${filter('search-regex','正则',renderSide.regex)}${filter('search-case','区分大小写',renderSide.caseSensitive)}</div>
-   <p class="search-description">支持 path:、file:、tag: 和多个关键词</p><div id="search-results"></div>`;
+   $('#side-content').innerHTML = `<div class="search-box">${icon('search')}<input id="workspace-search" aria-label="${tr("main.searchWorkspace")}" placeholder="${tr("main.searchFileContents")}" value="${escape(renderSide.query||'')}"></div>
+   <div class="search-options">${filter('search-regex',tr("main.regex"),renderSide.regex)}${filter('search-case',tr("main.caseSensitive"),renderSide.caseSensitive)}</div>
+   <p class="search-description">${tr("main.supportsPathFileTagAndMultipleKeywords")}</p><div id="search-results"></div>`;
    const input = $('#workspace-search');
    const filters=[$('#search-regex'),$('#search-case')];
    const filterValue=control=>control.getAttribute('aria-pressed')==='true';
@@ -567,17 +663,17 @@ function renderSide(){
  else if(pane==='links'){
    const links=new Set();
    mapLinks(current()?.text||'',(destination,wiki)=>{if(wiki)links.add(destination);return destination;});
-   $('#side-content').innerHTML=`<div class="tree-root">${icon('network')} 当前文档的链接</div>`+
+   $('#side-content').innerHTML=`<div class="tree-root">${icon('network')} ${tr("main.currentNoteLinks")}</div>`+
      ([...links].map(l=>`<button class="file-row link-note" data-wiki="${escape(l)}">${icon('link')}<span>${escape(l)}</span></button>`).join('')||
-     '<p class="side-empty">用 [[笔记名称]] 将想法连接起来。</p>');
+     `<p class="side-empty">${tr("main.linkYourIdeasWithNoteName")}</p>`);
  }
  else {
-   const listing = loadingTree ? '<p class="side-empty" role="status">正在加载工作区…</p>' :
-     files.length ? renderFileTree(files) : '<p class="side-empty">文件夹里还没有 Markdown 文档。</p>';
+   const listing = loadingTree ? `<p class="side-empty" role="status">${tr("main.loadingWorkspace")}</p>` :
+     files.length ? renderFileTree(files) : `<p class="side-empty">${tr("main.thisFolderHasNoMarkdownNotes")}</p>`;
    $('#side-content').innerHTML = root ? `<div class="tree-root" tabindex="-1">${icon('folder-closed')}<span>${escape(base(root)||root)}</span></div>${listing}` :
-     `<div class="no-workspace"><p>打开文件夹以浏览笔记。</p><button class="primary" data-action="folder">${icon('folder-open')}打开文件夹</button><button class="quiet" data-action="open">打开文档…</button></div>`;
+     `<div class="no-workspace"><p>${tr("main.openAFolderToBrowseNotes")}</p><button class="primary" data-action="folder">${icon('folder-open')}${tr("main.openFolder2")}</button><button class="quiet" data-action="open">${tr("main.openNote")}</button></div>`;
  }
- $('#workspace-name').textContent = root?base(root):'本地工作区';
+ $('#workspace-name').textContent = root?base(root):tr("main.localWorkspace");
  $('#workspace-path').textContent = root;
  $('#workspace-path').hidden = !root;
  $('[data-action="close-vault"]').hidden = !root;
@@ -594,7 +690,7 @@ async function search(query) {
   if (!results) return;
   if (!query.trim()) { results.replaceChildren(); return; }
   const serial = ++searchSerial;
-  results.textContent = '正在搜索…';
+  results.textContent = tr("main.searching");
   const result=await vaultSearch.query({query,regex:renderSide.regex,caseSensitive:renderSide.caseSensitive,
     drafts:tabs.filter(tab=>tab.path&&tab.dirty&&!tab.deleted).map(tab=>({id:fileKey(tab.path),text:tab.text}))});
   if (!result||serial!==searchSerial) return;
@@ -602,7 +698,7 @@ async function search(query) {
   if (error) {results.textContent=errorMessage(error);return;}
   results.innerHTML = found.length ? found.map(group=>`<details class="search-group" open><summary title="${escape(group.relative)}">${escape(base(group.relative))} <small>${group.hits.length}</small></summary>`+
     group.hits.map(hit=>`<button class="search-result" data-file="${escape(group.path)}" data-line="${hit.line || ''}"><span>${hit.line?hit.line+' · ':''}${escape(hit.text || group.relative)}</span></button>`).join('')+'</details>').join('')+
-    (total>=250?'<p class="side-empty">已显示前 250 条匹配。</p>':'') : '<p class="side-empty">没有找到匹配内容。</p>';
+    (total>=250?`<p class="side-empty">${tr("main.showingTheFirst250Matches")}</p>`:'') : `<p class="side-empty">${tr("main.noMatchesFound")}</p>`;
 }
 function backlinkExcerpt({text,marks=[]}) {
   let cursor = 0;
@@ -621,14 +717,14 @@ async function backlinks(){
  if (context !== backlinkContext) {
    backlinkContext = context;
    $('#backlink-count').textContent = '0';
-   $('#backlinks').innerHTML = t?.path ? '<p class="side-empty" role="status">正在查找反链…</p>' : '';
+   $('#backlinks').innerHTML = t?.path ? `<p class="side-empty" role="status">${tr("main.findingBacklinks")}</p>` : '';
  }
  let matches;
  try {
    matches = t?.path&&!t.deleted ? await platform.index.backlinks(t.path,tabs.filter(tab=>tab.path&&tab.dirty&&!tab.deleted).map(({path,text})=>({path,text}))) : [];
  } catch (error) {
    if (serial!==backlinkRequest) return;
-   $('#backlinks').innerHTML = '<p class="side-empty">无法读取反链。</p>';
+   $('#backlinks').innerHTML = `<p class="side-empty">${tr("main.couldNotLoadBacklinks")}</p>`;
    throw error;
  }
  if (serial!==backlinkRequest) return;
@@ -637,9 +733,9 @@ async function backlinks(){
  $('#backlink-count').textContent=linked.length;
  const group=(rows,key)=>rows.map(row=>`<details class="backlink-group"><summary title="${escape(row.path)}">${escape(row.name)}</summary>
    ${row[key].map(hit=>`<button type="button" class="backlink-context" data-file="${escape(row.path)}" data-line="${hit.line}"><span class="backlink-line">${hit.line}</span><span>${backlinkExcerpt(hit)}</span></button>`).join('')}
-   <button type="button" class="backlink" data-file="${escape(row.path)}" aria-label="打开 ${escape(row.name)}">${icon('file-text')}打开文档</button></details>`).join('');
- $('#backlinks').innerHTML=(linked.length?group(linked,'linked'):'<p class="side-empty backlinks-empty">其他笔记引用本文时，会出现在这里。</p>')+
-   (mentions.length?'<details class="unlinked-mentions"><summary>未链接提及 · '+mentions.length+'</summary>'+group(mentions,'unlinked')+'</details>':'');
+   <button type="button" class="backlink" data-file="${escape(row.path)}" aria-label="${tr("main.open")} ${escape(row.name)}">${icon('file-text')}${tr("main.openNote2")}</button></details>`).join('');
+ $('#backlinks').innerHTML=(linked.length?group(linked,'linked'):`<p class="side-empty backlinks-empty">${tr("main.notesThatLinkHereWillAppearIn")}</p>`)+
+   (mentions.length?`<details class="unlinked-mentions"><summary>${tr("main.unlinkedMentions")} `+mentions.length+'</summary>'+group(mentions,'unlinked')+'</details>':'');
  glyphs();
 }
 function restoreScroll(tab=current()) {
@@ -702,7 +798,7 @@ function loadDocumentTab(file) {
   const key=fileKey(file);
   if(!openingFiles.has(key)) {
     openingFiles.set(key,platform.fs.read(file).then(data=>{
-      const tab={id:uid(),path:file,name:base(file),text:data.text,saved:data.text,mtime:data.mtime,needsLf:data.needsLf,dirty:false,
+      const tab={id:uid(),path:file,name:base(file),text:data.text,saved:data.text,mtime:data.mtime,snapshot:data.snapshot,needsLf:data.needsLf,dirty:false,
         ...(isCanvas(file)?{viewMode:'source'}:{})};
       tabs.push(tab);
       return tab;
@@ -721,31 +817,55 @@ function openDocumentSplit(tab=current(),heading) {
   workspaceFeatures.openSplit(tab,{heading,reading:!isCanvas(tab?.path)});
   session();
 }
-function newDocument(text='',name='未命名.md'){let n=1;while(tabs.some(t=>t.name===name)){name=`未命名 ${++n}.md`;}const t={id:uid(),path:null,name,text,saved:'',mtime:null,dirty:!!text};tabs.push(t);activate(t.id);}
+function newDocument(text='',name=tr('main.untitledName'),builtin){let n=1;while(tabs.some(t=>t.name===name)){name=tr('main.numberedUntitledName',{count:++n});}const t={id:uid(),path:null,name,text,saved:builtin?text:'',mtime:null,dirty:!builtin&&!!text,builtin};tabs.push(t);activate(t.id);}
 async function releaseUnusedFile(path) {
   if (path&&!tabs.some(tab=>tab.path&&fileKey(tab.path)===fileKey(path))) await platform.fs.release(path);
 }
-async function save(t=current(),saveAs=false,silent=false) {
+async function save(t=current(),saveAs=false,silent=false,resolution) {
   if (t===current()) flushLive();
   if (!t) return true;
-  if (workspaceBusy) throw Error('文件操作进行中，请稍候。');
+  if (workspaceBusy) throw Error(tr("main.aFileActionIsRunningPleaseWait"));
   if (silent&&(t.deleted||t.conflict||t.holdAutoSave)) return false;
   if (t.deleted) saveAs=true;
-  if (t.conflict&&!saveAs) {renderExternalNotice(current());return false;}
+  if (t.conflict&&!saveAs&&!resolution) {renderExternalNotice(current());return false;}
   clearTimeout(saveTimers.get(t.id));
   if (t.saving) {
     await t.saving;
-    return t.text===t.saved||save(t,saveAs,silent);
+    return resolution?false:t.text===t.saved||save(t,saveAs,silent);
   }
-  if (!saveAs&&!t.dirty&&t.path&&(silent||!t.needsLf)) return true;
+  if(!saveAs&&!resolution&&!t.dirty&&t.path){
+    const baseline=t.snapshot;
+    await checkOpenTabs([t]);
+    if(t.deleted||t.conflict)return false;
+    if(t.snapshot!==baseline||silent||!t.needsLf)return true;
+  }
   const draft=t.text,previousPath=t.path;
   const text=normalizeLineEndings(previousPath||t.name,draft);
   t.saving=(async()=>{
-    const r=await platform.fs.save({path:previousPath,name:t.name,text,saved:t.saved,mtime:t.mtime,saveAs});
+    const expected=resolution?t.conflict:t;
+    const r=await platform.fs.save({path:previousPath,name:t.name,text:resolution==='reload'?draft:text,
+      saved:resolution?expected.text:t.saved,mtime:expected.mtime,snapshot:expected.snapshot,saveAs,resolution});
     if (!r) return false;
     if (r.conflict) {
       if (r.mtime===undefined) {t.deleted=true;scheduleSave(t);}
-      else flagConflict(t,r);
+      else if(!t.dirty&&!resolution){
+        replaceFromDisk(t,r);
+        if(t===current()){syncEditors();restoreScroll();}
+        toast(tr('dataSafety.reloaded'));
+      }else flagConflict(t,r);
+      renderTabs();stats();session();
+      return false;
+    }
+    if(r.reloaded){
+      if(t===current())flushLive();
+      replaceFromDisk(t,r,t.text!==draft);
+      if(t===current()){syncEditors();restoreScroll();}
+      renderTabs();stats();workspaceFeatures.refreshSplit();await persist();
+      toast(tr('dataSafety.reloaded'));
+      return true;
+    }
+    if(r.text!==undefined&&r.text!==text){
+      flagConflict(t,r);
       renderTabs();stats();session();
       return false;
     }
@@ -754,7 +874,8 @@ async function save(t=current(),saveAs=false,silent=false) {
     delete t.holdAutoSave;
     if(t.text===draft)t.text=text;
     t.needsLf=false;
-    t.path=r.path;t.name=base(r.path);t.mtime=r.mtime;t.saved=text;t.dirty=t.text!==text;
+    t.path=r.path;t.name=base(r.path);t.mtime=r.mtime;t.snapshot=r.snapshot;t.saved=text;t.dirty=t.text!==text;
+    scheduleSave(t);
     await releaseUnusedFile(previousPath);
     renderTabs();stats();await persist();
     if(!previousPath||fileKey(previousPath)!==fileKey(r.path))files=await platform.workspace.tree();
@@ -763,7 +884,7 @@ async function save(t=current(),saveAs=false,silent=false) {
       if(row)row.modified=r.mtime;
     }
     renderSide();
-    if (!silent) toast('已保存到本地');
+    if (!silent) toast(tr("main.savedLocally"));
     return true;
   })();
   try { return await t.saving; } finally { t.saving=null; }
@@ -790,7 +911,7 @@ async function closeTab(id) {
   await persist();
 }
 function showMode(){
-  $('#vim-mode').hidden=mode!=='source'||!preferences.vim;
+  $('#vim-mode').hidden=mobileLayout()||mode!=='source'||!preferences.vim||!vimModule;
   linkCompletion?.close();
   const tab = current();
   const meta = splitFrontmatter(tab?.text||'');
@@ -798,7 +919,7 @@ function showMode(){
   if (propertyCard) {
     const edit = document.createElement('button');
     edit.dataset.action = 'properties';
-    edit.textContent = '编辑属性';
+    edit.textContent = tr("main.editProperties");
     propertyCard.append(edit);
   }
   $('#live-properties').replaceChildren(...(propertyCard?[propertyCard]:[]));
@@ -863,7 +984,7 @@ async function embedCard(destination,path,visited,depth,budget,settings) {
   jump.href='#';
   jump.dataset.wiki=destination;
   if(path)jump.dataset.noteSource=path;
-  jump.textContent='打开原稿';
+  jump.textContent=tr("main.openOriginal");
   header.append(label,jump);
   card.append(header);
   const status=message=>{
@@ -873,14 +994,14 @@ async function embedCard(destination,path,visited,depth,budget,settings) {
     card.append(warning);
     return card;
   };
-  if(!path)return status('保存笔记后可预览内嵌内容。');
-  if(budget.remaining--<=0||depth>=12)return status('内嵌已达到展开上限。');
+  if(!path)return status(tr("main.saveThisNoteToPreviewEmbeds"));
+  if(budget.remaining--<=0||depth>=12)return status(tr("main.embedDepthLimitReached"));
   if(/\.(?:png|jpe?g|gif|webp|bmp|svg|ico|avif)$/i.test(destination)){
     const img=document.createElement('img');
     img.alt=destination;
     if(nativeMobile){
       const url=await platform.fs.imageSource(path,destination,true);
-      if(!url)return status('找不到内嵌图片。');
+      if(!url)return status(tr("main.embeddedImageNotFound"));
       img.addEventListener('error',()=>platform.export.image(url).then(data=>{img.src=data;}).catch(console.warn),{once:true});
       img.src=url;
     }else img.src=localImage(destination,path);
@@ -889,15 +1010,15 @@ async function embedCard(destination,path,visited,depth,budget,settings) {
   const target=await platform.index.target({source:path,destination,wiki:true});
   if(!target){
     const [detail]=await platform.index.links({source:path,destinations:[destination]});
-    return status(detail?.status==='ambiguous'?'内嵌目标有同名笔记，请指定路径。':'内嵌笔记尚未创建。');
+    return status(detail?.status==='ambiguous'?tr("main.severalNotesShareThisNameUseA"):tr("main.theEmbeddedNoteHasNotBeenCreated"));
   }
   label.textContent=base(target.path)+(target.heading?' · '+target.heading:'');
   const ancestors=enterEmbed(visited,target.path,fileKey);
-  if(!ancestors)return status('检测到循环内嵌');
+  if(!ancestors)return status(tr("main.circularEmbedDetected"));
   const text=findDocumentTab(target.path)?.text ?? (await platform.fs.read(target.path)).text;
   const content=document.createElement('div');
   await renderContent(content,text,target.path,ancestors,depth+1,budget,settings,target.heading);
-  if(!content.childNodes.length)return status('找不到内嵌章节。');
+  if(!content.childNodes.length)return status(tr("main.embeddedHeadingNotFound"));
   card.append(...content.childNodes);
   return card;
 }
@@ -961,7 +1082,7 @@ async function renderRead() {
     if(properties&&tab){
       const edit=document.createElement('button');
       edit.dataset.action='properties';
-      edit.textContent='编辑属性';
+      edit.textContent=tr("main.editProperties");
       properties.append(edit);
     }
     if(mobileLayout())wrapReadingTables(container);
@@ -1007,10 +1128,10 @@ async function wiki(destination, isWiki=true, sourcePath=current()?.path){
    if(detail?.status==='ambiguous'){
      selectSidePane('health');
      if(mobileLayout())mobileShell.openDrawer('left');
-     return toast('此链接对应多篇同名笔记，请在体检中指定目标。');
+     return toast(tr("main.severalNotesMatchThisLinkSelectA"));
    }
    if(isWiki&&(!detail||detail.status==='placeholder'))return workspaceUI.createMissing(destination,sourcePath);
-   return toast('找不到链接目标');
+   return toast(tr("main.linkTargetNotFound"));
  }
  if(!await openFile(target.path))return;
  if (target.heading?.startsWith('^')) {
@@ -1018,13 +1139,13 @@ async function wiki(destination, isWiki=true, sourcePath=current()?.path){
    if (mode!=='read') await setMode('read');
    const block=[...$('#reading').querySelectorAll('[data-block-id]')].find(element=>element.dataset.blockId===id);
    if(block)block.scrollIntoView({block:'center'});
-   else toast('找不到链接目标段落');
+   else toast(tr("main.linkedParagraphNotFound"));
    return;
  }
  if(target.heading){
    const i=headingIndex(headings(),target.heading);
    if(i>=0)jumpHeading(i);
-   else toast('找不到链接目标章节');
+   else toast(tr("main.linkedHeadingNotFound"));
  }
 }
 function jumpHeading(i,fromOutline=false) {
@@ -1041,26 +1162,30 @@ function jumpHeading(i,fromOutline=false) {
   }
   outlineUI?.schedule();
 }
-const commands=[['new','新建 Markdown 文档','Ctrl N','file-plus-2'],['open','打开文档…','Ctrl O','file-text'],['folder','打开文件夹…','Ctrl Shift O','folder-open'],['save','保存当前文档','Ctrl S','save'],['saveAs','另存为…','Ctrl Shift S','copy'],['pdf','导出 PDF','','file-down'],['html','导出独立 HTML','','file-down'],['png','导出阅读长图 / 选中块','','image'],['history','查看版本历史','','history'],['settings','写作与公式设置','','settings'],['typewriter','切换打字机模式','','align-center'],['paragraph','切换段落聚焦','','scan'],['live','切换到即时编辑','','pen-line'],['source','切换到源码模式','','code-2'],['read','切换到阅读模式','','book-open'],['focus','切换专注模式','F8','scan'],['theme','切换明暗主题','','sun-moon'],['autosave','切换自动保存','','save'],['reveal','在资源管理器中显示','','folder-search'],['help','使用指南与快捷键','','circle-help']];
+function localizedCommands(){
+const commands=[['new',tr("main.newMarkdownNote"),'Ctrl N','file-plus-2'],['open',tr("main.openNote"),'Ctrl O','file-text'],['folder',tr("main.openFolder"),'Ctrl Shift O','folder-open'],['save',tr("main.saveCurrentNote"),'Ctrl S','save'],['saveAs',tr("main.saveAs"),'Ctrl Shift S','copy'],['pdf',tr("main.exportPdf2"),'','file-down'],['html',tr("main.exportStandaloneHtml"),'','file-down'],['png',tr("main.exportLongImageOrSelection"),'','image'],['history',tr("main.viewVersionHistory"),'','history'],['activity',tr("activity.title"),'','history'],['settings',tr("main.editorMathSettings"),'','settings'],['typewriter',tr("main.toggleTypewriterMode"),'','align-center'],['paragraph',tr("main.toggleParagraphFocus"),'','scan'],['live',tr("main.switchToLive"),'','pen-line'],['source',tr("main.switchToSource"),'','code-2'],['read',tr("main.switchToRead"),'','book-open'],['focus',tr("main.toggleFocusMode"),'F8','scan'],['theme',tr("main.toggleLightAndDark"),'','sun-moon'],['autosave',tr("main.toggleAutoSave"),'','save'],['reveal',tr("main.showInFileExplorer"),'','folder-search'],['help',tr("main.guideShortcuts"),'','circle-help']];
 commands.push(
-  ['bookmarks','打开书签','','bookmark'],['bookmarkHeading','收藏当前笔记或标题','','bookmark-plus'],
-  ['reopen','重新打开刚关闭的文档','Ctrl Shift T','history'],['split','在右侧分栏打开当前笔记','','columns-2'],
-  ['graph','打开全库图谱','','network'],['localGraph','打开局部图谱','','git-fork'],
-  ['canvas','打开 Canvas 画布','','panels-top-left'],['bases','打开属性视图（Bases）','','table'],
-  ['template','插入笔记模板','','file-text'],['daily','打开今日笔记','','calendar-days'],
-  ['random','随机打开笔记','','shuffle'],['vaultHealth','知识库体检','','heart-pulse'],
-  ['linkReferences','补全/更新文末标准引用定义','','link-2'],
-  ['properties','编辑笔记属性','','list-checks'],['exportSettings','PDF 与公式设置','','settings'],
-  ['docx','导出 Word（Pandoc）','','file-down'],['epub','导出 EPUB（Pandoc）','','file-down']
+  ['bookmarks',tr("main.openBookmarks"),'','bookmark'],['bookmarkHeading',tr("main.bookmarkCurrentNoteOrHeading"),'','bookmark-plus'],
+  ['reopen',tr("main.reopenClosedNote"),'Ctrl Shift T','history'],['split',tr("main.openCurrentNoteInRightSplit"),'','columns-2'],
+  ['graph',tr("main.openVaultGraph"),'','network'],['localGraph',tr("main.openLocalGraph"),'','git-fork'],
+  ['canvas',tr("main.openCanvas"),'','panels-top-left'],['bases',tr("main.openPropertiesViewBases"),'','table'],
+  ['template',tr("main.insertNoteTemplate"),'','file-text'],['daily',tr("main.openDailyNote"),'','calendar-days'],
+  ['random',tr("main.openRandomNote"),'','shuffle'],['vaultHealth',tr("main.vaultCheck"),'','heart-pulse'],
+  ['linkReferences',tr("main.updateMarkdownReferenceDefinitions"),'','link-2'],
+  ['properties',tr("main.editNoteProperties"),'','list-checks'],['exportSettings',tr("main.pdfMathSettings"),'','settings'],
+  ['docx',tr("main.exportWordPandoc"),'','file-down'],['epub',tr("main.exportEpubPandoc"),'','file-down']
 );
 commands.push(...[
-  ['palette','打开命令面板'],['find','文内查找'],['searchWorkspace','工作区全文搜索'],['sidebar','切换文件侧栏'],
-  ['closeTab','关闭当前标签'],['nextTab','下一个标签'],['previousTab','上一个标签'],['shortcuts','快捷键设置'],
-  ['vim','源码模式启用或关闭 Vim 键位'],['formatTable','格式化当前 Markdown 表格'],['formatTables','格式化全文 Markdown 表格'],
-  ['renumberList','重排当前有序列表序号'],['tasks','切换任务勾选'],['wrapBold','包裹为粗体'],['wrapItalic','包裹为斜体'],
-  ['wrapCode','包裹为行内代码'],['wrapStrike','包裹为删除线'],['wrapMath','包裹为行内公式'],['toc','插入或更新目录'],
-  ['numberHeadings','添加或更新章节编号（跳过 H1）'],['numberAllHeadings','添加或更新章节编号（含 H1）'],['clearHeadings','清除章节编号'],['exportCenter','打开导出中心'],['copyRich','复制为富文本'],['portableMarkdown','导出便携 Markdown 包']
+  ['palette',tr("main.openCommandPalette")],['find',tr("main.findInNote")],['searchWorkspace',tr("main.searchWorkspace2")],['sidebar',tr("main.toggleFileSidebar")],
+  ['closeTab',tr("main.closeCurrentTab")],['nextTab',tr("main.nextTab")],['previousTab',tr("main.previousTab")],['shortcuts',tr("main.shortcutSettings")],
+  ['vim',tr("main.toggleVimKeysInSource")],['formatTable',tr("main.formatCurrentMarkdownTable")],['formatTables',tr("main.formatAllMarkdownTables")],
+  ['renumberList',tr("main.renumberOrderedList")],['tasks',tr("main.toggleTask")],['wrapBold',tr("main.makeBold")],['wrapItalic',tr("main.makeItalic")],
+  ['wrapCode',tr("main.formatAsInlineCode")],['wrapStrike',tr("main.applyStrikethrough")],['wrapMath',tr("main.formatAsInlineMath")],['toc',tr("main.updateTableOfContents")],
+  ['numberHeadings',tr("main.updateSectionNumbersSkipH1")],['numberAllHeadings',tr("main.updateSectionNumbersIncludeH1")],['clearHeadings',tr("main.clearSectionNumbers")],['exportCenter',tr("main.openExportCenter")],['copyRich',tr("main.copyAsRichText")],['portableMarkdown',tr("main.exportPortableMarkdownBundle")]
 ].map(([id,label])=>[id,label,'','command']));
+return commands;
+}
+let commands=localizedCommands();
 let commandRows=[],commandIndex=0;
 let paletteOrigin;
 function palette(){
@@ -1080,7 +1205,7 @@ function closePalette(){
   if (paletteOrigin?.isConnected) paletteOrigin.focus({preventScroll:true});
   paletteOrigin = undefined;
 }
-function filterCommands(){const q=$('#command-input').value.toLowerCase().trim();const search=q.replace(/^>/,'').trim();commandRows=[...(!q.startsWith('>')?flat().filter(f=>f.name.toLowerCase().includes(search)).slice(0,12).map(f=>({label:f.name,detail:f.path,icon:'file-text',path:f.path})):[]),...commands.filter(c=>c[1].toLowerCase().includes(search)||c[0].toLowerCase().includes(search)).map(c=>({action:c[0],label:c[1],detail:keycaps(({...defaultShortcuts,...preferences.shortcuts})[c[0]],mac),icon:c[3]}))];commandIndex=Math.min(commandIndex,Math.max(0,commandRows.length-1));$('#command-results').innerHTML=commandRows.map((c,i)=>`<button class="command-row ${i===commandIndex?'chosen':''}" data-command="${i}">${icon(c.icon)}<span>${escape(c.label)}</span><small>${escape(c.path?base(c.detail.replace(/[\\/][^\\/]+$/,'')):c.detail)}</small></button>`).join('')||'<p class="side-empty">没有匹配的文件或命令</p>';glyphs();}
+function filterCommands(){const q=$('#command-input').value.toLowerCase().trim();const search=q.replace(/^>/,'').trim();commandRows=[...(!q.startsWith('>')?flat().filter(f=>f.name.toLowerCase().includes(search)).slice(0,12).map(f=>({label:f.name,detail:f.path,icon:'file-text',path:f.path})):[]),...commands.filter(c=>c[1].toLowerCase().includes(search)||c[0].toLowerCase().includes(search)).map(c=>({action:c[0],label:c[1],detail:keycaps(({...defaultShortcuts,...preferences.shortcuts})[c[0]],mac),icon:c[3]}))];commandIndex=Math.min(commandIndex,Math.max(0,commandRows.length-1));$('#command-results').innerHTML=commandRows.map((c,i)=>`<button class="command-row ${i===commandIndex?'chosen':''}" data-command="${i}">${icon(c.icon)}<span>${escape(c.label)}</span><small>${escape(c.path?base(c.detail.replace(/[\\/][^\\/]+$/,'')):c.detail)}</small></button>`).join('')||`<p class="side-empty">${tr("main.noMatchingFilesOrCommands")}</p>`;glyphs();}
 function executeCommand(i){const c=commandRows[i];if(!c)return;closePalette();if(c.path)openFile(c.path);else action(c.action).catch(fail);}
 $('#command-input').addEventListener('input',()=>{commandIndex=0;filterCommands();});
 $('#command-input').addEventListener('keydown',event=>{
@@ -1102,7 +1227,7 @@ async function renderTags() {
   const request=++tagRequest;
   const side=$('#side-content');
   const opened=new Set([...side.querySelectorAll('details[data-tag][open]')].map(el=>el.dataset.tag));
-  if(!opened.size)side.innerHTML='<p class="side-empty">正在读取标签…</p>';
+  if(!opened.size)side.innerHTML=`<p class="side-empty">${tr("main.loadingTags")}</p>`;
   const notes=new Map((await platform.index.notes('metadata',pendingDrafts())).map(note=>[fileKey(note.path),note]));
   for(const tab of tabs)if(tab.path&&!tab.deleted&&!notes.has(fileKey(tab.path)))
     notes.set(fileKey(tab.path),{path:tab.path,tags:[...noteTags(tab.text,marked)]});
@@ -1110,13 +1235,13 @@ async function renderTags() {
   const tree=tagTree(notes.values());
   const row=({label,tag,paths,children})=>{
     const active=selectedTag===tag;
-    const action='<button type="button" class="tag-filter" aria-pressed="'+active+'">全部 #'+escape(tag)+' · '+paths.length+'</button>';
+    const action='<button type="button" class="tag-filter" aria-pressed="'+active+'">'+tr("main.all")+escape(tag)+' · '+paths.length+'</button>';
     const files=active||!children.length?paths.map(path=>
       '<button class="file-row" title="'+escape(path)+'" data-file="'+escape(path)+'">'+escape(base(path))+'</button>').join(''):'';
     return '<details class="tag-group" data-tag="'+escape(tag)+'" '+(opened.has(tag)||active?'open':'')+'>'+
       '<summary>#'+escape(label)+' <small>'+paths.length+'</small></summary>'+action+files+children.map(row).join('')+'</details>';
   };
-  side.innerHTML=tree.map(row).join('')||'<p class="side-empty">工作区暂无标签。</p>';
+  side.innerHTML=tree.map(row).join('')||`<p class="side-empty">${tr("main.noTagsInThisWorkspace")}</p>`;
   for(const button of side.querySelectorAll('.tag-filter'))button.onclick=()=>{
     selectedTag=button.closest('[data-tag]').dataset.tag;
     renderTags().catch(fail);
@@ -1124,18 +1249,18 @@ async function renderTags() {
 }
 async function renderHealth(){
   const request=++healthRequest, side=$('#side-content');
-  if(!root){side.innerHTML='<p class="side-empty">打开知识库后可运行体检。</p>';return;}
+  if(!root){side.innerHTML=`<p class="side-empty">${tr("main.openAVaultToRunVaultCheck")}</p>`;return;}
   const opened=new Map([...side.querySelectorAll('[data-health]')].map(el=>[el.dataset.health,el.open]));
-  if(!opened.size)side.innerHTML='<p class="side-empty" role="status">正在读取知识库索引…</p>';
+  if(!opened.size)side.innerHTML=`<p class="side-empty" role="status">${tr("main.readingVaultIndex")}</p>`;
   const {orphans,issues}=await platform.index.health(pendingDrafts());
   if(pane!=='health'||request!==healthRequest)return;
   const group=(id,label,entries)=>'<details class="pkm-health" data-health="'+id+'" '+(opened.get(id)??true?'open':'')+
     '><summary>'+label+' <small>'+entries.length+'</small></summary>'+
-    (entries.join('')||'<p class="side-empty">暂无</p>')+'</details>';
+    (entries.join('')||`<p class="side-empty">${tr("main.none")}</p>`)+'</details>';
   const issueRow=(issue,i)=>{
-    const heading=issue.status==='ambiguous'?'歧义链接':issue.status==='broken-heading'?'失效章节':
-      issue.status==='broken'?'失效链接':'待创建';
-    const fixes=issue.status==='placeholder'?'<button type="button" data-create-placeholder="'+i+'">新建笔记</button>':
+    const heading=issue.status==='ambiguous'?tr("main.ambiguousLinks"):issue.status==='broken-heading'?tr("main.missingHeadings"):
+      issue.status==='broken'?tr("main.brokenLinks"):tr("main.pending");
+    const fixes=issue.status==='placeholder'?'<button type="button" data-create-placeholder="'+i+`">${tr("main.newNote2")}</button>`:
       (issue.candidates||[]).map((candidate,j)=>'<button type="button" data-fix-issue="'+i+'" data-candidate="'+j+'">'+
         escape(candidate.identifier)+'</button>').join('');
     return '<article class="health-issue"><button type="button" class="backlink-context" data-file="'+escape(issue.source)+
@@ -1145,9 +1270,9 @@ async function renderHealth(){
   };
   const groups=[[],[]];
   issues.forEach((issue,i)=>groups[Number(issue.status!=='placeholder')].push(issueRow(issue,i)));
-  side.innerHTML=group('orphans','孤立笔记',orphans.map(path=>
+  side.innerHTML=group('orphans',tr("main.orphans"),orphans.map(path=>
     '<button type="button" class="file-row" data-file="'+escape(path)+'" title="'+escape(path)+'">'+escape(relativePath(path))+'</button>'))+
-    group('placeholders','待建占位链',groups[0])+group('broken','坏链与歧义链',groups[1]);
+    group('placeholders',tr("main.placeholders"),groups[0])+group('broken',tr("main.brokenAmbiguousLinks"),groups[1]);
   for(const button of side.querySelectorAll('[data-create-placeholder]'))button.onclick=()=>{
     const issue=issues[Number(button.dataset.createPlaceholder)];
     workspaceUI.createMissing(issue.destination,issue.source).catch(fail);
@@ -1161,7 +1286,7 @@ async function renderHealth(){
       const previous=findDocumentTab(issue.source)?.text ?? (await platform.fs.read(issue.source)).text;
       await updatePkmNote(issue.source,previous,replaceReference(previous,issue,candidate.identifier));
       await renderHealth();
-      toast('已将引用指向 '+candidate.label);
+      toast(`${tr("main.linkUpdatedTo")} `+candidate.label);
     } catch(error){fail(error);}
     finally{button.disabled=false;}
   };
@@ -1212,8 +1337,8 @@ function applyEditorText(text) {
 async function generateReferences(){
   flushLive();
   const tab=current();
-  if(!tab?.path)return toast('请先保存文档');
-  if(!root)return toast('请先打开工作区');
+  if(!tab?.path)return toast(tr("main.saveTheNoteFirst"));
+  if(!root)return toast(tr("main.openAWorkspaceFirst"));
   const previous=tab.text;
   const {text,count}=await updateReferenceDefinitions(previous,async destinations=>{
     const targets=[];
@@ -1222,9 +1347,9 @@ async function generateReferences(){
     }));
     return targets.map(target=>target?.status==='ok'?target:null);
   },path=>relativeNotePath(tab.path,path,fileKey));
-  if(current()!==tab||tab.text!==previous)return toast('笔记已变化，请重新生成引用定义');
+  if(current()!==tab||tab.text!==previous)return toast(tr("main.theNoteChangedGenerateTheReferenceDefinitions"));
   if(text!==previous)await updatePkmNote(tab.path,previous,text);
-  toast('已补全 '+count+' 条标准引用定义');
+  toast(`${tr("main.added")} `+count+` ${tr("main.referenceDefinitions")}`);
 }
 
 function flagConflict(tab,disk,origin) {
@@ -1235,32 +1360,34 @@ function flagConflict(tab,disk,origin) {
     const stamp=localTimestamp();
     const path=tab.path.replaceAll('\\','/'),name=base(tab.path);
     const suffix=name.match(/\.[^.]+$/)?.[0]||'.md';
-    const copy=name.slice(0,-suffix.length)+' (同步草稿 '+stamp+' '+(Date.now()%1000000)+')'+suffix;
+    const copy=name.slice(0,-suffix.length)+' ('+tr("main.syncDraft")+' '+stamp+' '+(Date.now()%1000000)+')'+suffix;
     platform.workspace.edit({type:'note',parent:path.slice(0,path.lastIndexOf('/')),name:copy,text:tab.text})
       .then(async result=>{
         if(!tab.conflict||tab.conflict.origin!=='sync')return;
         tab.conflict.copy=result.path;session();
       }).catch(error=>console.warn(errorMessage(error)));
-  }else if(first&&tab===current())toast('文件已被其他程序修改，请查看差异');
+  }else if(first&&tab===current())toast(tr("main.anotherProgramChangedThisFileViewThe"));
 }
 
 function renderExternalNotice(tab) {
   const notice=$('#external-change');
   const state=tab?.deleted?'deleted':tab?.conflict?'conflict':'';
   notice.hidden=!state;
-  if (notice.dataset.state===state) return;
+  if (notice.dataset.state===state&&notice.dataset.locale===getLocale()) return;
   notice.dataset.state=state;
-  if (state==='deleted') notice.innerHTML='<span role="status">原文件已从磁盘删除，当前内容仍可另存。</span>'+
-    '<button data-external-action="save-as">另存为</button><button data-external-action="close">关闭标签</button>';
-  else if (state==='conflict') notice.innerHTML='<span role="status">'+(tab.conflict.origin==='sync'?'同步版本已到达，当前草稿已保留。':'磁盘上的笔记已修改，当前草稿已保留。')+'</span>'+
-    '<button data-external-action="diff">查看差异</button><button data-external-action="reload">加载磁盘版本</button>'+
-    '<button data-external-action="keep">保留当前草稿</button>';
+  notice.dataset.locale=getLocale();
+  if (state==='deleted') notice.innerHTML=`<span role="status">${tr("main.theOriginalFileWasDeletedYouCan")}</span>`+
+    `<button data-external-action="save-as">${tr("main.saveAs2")}</button><button data-external-action="close">${tr("main.closeTab")}</button>`;
+  else if (state==='conflict') notice.innerHTML='<span role="status">'+(tab.conflict.origin==='sync'?tr("main.aSyncedVersionArrivedYourDraftWas"):tr("main.theFileOnDiskChangedYourDraft"))+'</span>'+
+    `<button data-external-action="diff">${tr("main.viewDiff")}</button><button data-external-action="reload">${tr("dataSafety.loadDisk")}</button>`+
+    `<button data-external-action="keep">${tr("dataSafety.overwrite")}</button>`;
   else notice.replaceChildren();
 }
 
 function replaceFromDisk(tab,disk,keepDraft=false) {
   tab.saved=disk.text;
   tab.mtime=disk.mtime;
+  tab.snapshot=disk.snapshot;
   tab.needsLf=disk.needsLf;
   if (!keepDraft) tab.text=disk.text;
   tab.dirty=tab.text!==tab.saved;
@@ -1270,22 +1397,20 @@ function replaceFromDisk(tab,disk,keepDraft=false) {
   scheduleSave(tab);
 }
 
-async function resolveExternalNotice(action) {
+async function resolveExternalNotice(action,reviewed) {
   const tab=current();
   if (!tab) return;
   if (action==='diff'&&tab.conflict) return showHistory(tab,tab.conflict);
   if (action==='close') return closeTab(tab.id);
   if (action==='save-as') return save(tab,true);
   if (!tab.conflict) return;
-  const path=tab.path;
-  const disk=await platform.fs.read(path);
-  if (tab.path!==path||!tabs.includes(tab)) return;
-  if (tab===current()) {flushLive();captureEditors();}
-  replaceFromDisk(tab,disk,action==='keep');
-  if (tab===current()&&action==='reload') {syncEditors();restoreScroll();}
-  renderTabs();stats();workspaceFeatures.refreshSplit();session();
-  if (tab===current()&&mode==='source') source.focus();
-  if (tab===current()&&mode==='live') liveView().focus();
+  if(reviewed&&!sameSnapshot(reviewed.snapshot,tab.conflict.snapshot)){
+    toast(tr('dataSafety.reviewAgain'));
+    return;
+  }
+  if(!await save(tab,false,false,action==='reload'?'reload':'overwrite'))return;
+  if(tab===current()&&mode==='source')source.focus();
+  if(tab===current()&&mode==='live')liveView().focus();
   backlinks().catch(fail);
 }
 
@@ -1301,38 +1426,49 @@ async function updateTabsFromDisk(batch) {
   const byPath=new Map(batch.changes.map(change=>[fileKey(change.path),change]));
   const removedDirs=batch.changes.filter(change=>change.type==='unlinkDir');
   const affected=tabs.filter(tab=>tab.path&&(byPath.has(fileKey(tab.path))||removedDirs.some(change=>containsPath(change.path,tab.path,fileKey))));
-  const snapshots=await Promise.all(affected.map(async tab=>{
-    const path=tab.path, change=byPath.get(fileKey(path));
+  await checkOpenTabs(affected,batch.source,batch.root);
+}
+
+async function checkOpenTabs(affected=tabs,origin,workspace=root) {
+  const snapshots=await Promise.all(affected.filter(tab=>tab.path).map(async tab=>{
+    const path=tab.path;
     await tab.saving?.catch(()=>{});
-    if (change?.type==='unlink'||!change) return {tab,path,deleted:true};
-    const disk=await platform.fs.read(path).catch(()=>null);
-    return {tab,path,disk};
+    const baseline=tab.snapshot,mtime=tab.mtime,known=tab.saved;
+    const disk=await platform.fs.read(path,true).catch(error=>{console.warn(errorMessage(error));return undefined;});
+    return {tab,path,disk,baseline,mtime,known};
   }));
-  if (root!==batch.root) return;
-  let refresh=false, changed=false;
+  if(root!==workspace)return;
   flushLive();
-  for (const {tab,path,disk,deleted} of snapshots) {
-    if (tab.path!==path||!tabs.includes(tab)) continue;
-    if (deleted) {
+  let refresh=false,changed=false,reloaded=false;
+  for(const {tab,path,disk,baseline,mtime,known} of snapshots){
+    if(disk===undefined||tab.path!==path||!tabs.includes(tab)||tab.saving||
+      tab.snapshot!==baseline||tab.mtime!==mtime||tab.saved!==known)continue;
+    if(!disk){
+      if(tab.deleted)continue;
       tab.deleted=true;
       delete tab.conflict;
       scheduleSave(tab);
-    } else if (disk) {
+    }else{
+      const unchanged=baseline?sameSnapshot(baseline,disk.snapshot):disk.mtime===mtime&&disk.text===known;
+      if(unchanged&&!tab.deleted&&!tab.conflict&&baseline)continue;
       delete tab.deleted;
-      const baseline=disk.text===tab.saved;
-      if (!tab.dirty||disk.text===tab.text) {
-        if (tab===current()&&tab.text!==disk.text) {captureEditors();refresh=true;}
-        replaceFromDisk(tab,disk);
-      } else if (baseline) {
-        tab.mtime=disk.mtime;
+      if(!unchanged&&tab.dirty){
+        flagConflict(tab,disk,origin);
+      }else if(unchanged&&tab.dirty){
+        tab.snapshot=disk.snapshot;
         delete tab.conflict;
         scheduleSave(tab);
-      } else flagConflict(tab,disk,batch.source);
-    } else continue;
+      }else{
+        if(tab===current()&&tab.text!==disk.text){captureEditors();refresh=true;}
+        replaceFromDisk(tab,disk);
+        reloaded ||= !unchanged;
+      }
+    }
     changed=true;
   }
-  if (refresh) {syncEditors();restoreScroll();}
-  if (changed) {renderTabs();stats();workspaceFeatures.refreshSplit();session();}
+  if(refresh){syncEditors();restoreScroll();}
+  if(changed){renderTabs();stats();workspaceFeatures.refreshSplit();session();}
+  if(reloaded)toast(tr('dataSafety.reloaded'));
 }
 
 let externalChanges=Promise.resolve();
@@ -1361,36 +1497,36 @@ function mountWritingSettings(panel,{mobile}) {
   const select = (value,label) => '<option value="'+value+'" '+(preferences.attachmentStrategy===value?'selected':'')+'>'+label+'</option>';
   const field = (key,label) => '<label>'+label+'<input name="'+key+'" value="'+escape(preferences[key])+'"></label>';
   const checkbox = (key,label) => settingToggle(key,label,{checked:preferences[key]});
-  const directories='<label>图片保存位置<select name="attachmentStrategy">'+select('workspace','工作区根目录')+select('note','文档所在目录')+'</select></label>'+
-    field('workspaceAttachments','工作区附件子目录')+field('noteAttachments','文档附件子目录（可用 ${filename}）')+
-    field('newNoteDirectory','新建双链笔记的工作区子目录（留空使用当前目录）')+
-    field('templateDirectory','模板目录（相对工作区）')+
-    field('dailyDirectory','每日笔记目录（相对工作区）')+
-    field('dailyFilePattern','每日笔记文件名格式（YYYY、MM、DD）')+
-    field('dailyTemplate','每日笔记模板文件路径（相对工作区，可留空）');
-  const compression=checkbox('webpCompression','粘贴大图自动转为 WebP')+
-    '<label>最大宽度（px）<input name="webpWidth" type="number" min="256" max="3840" required value="'+preferences.webpWidth+'"></label>'+
-    '<label>WebP 质量<input name="webpQuality" type="number" min=".1" max="1" step=".01" required value="'+preferences.webpQuality+'"></label>';
-  const editing='<label>每篇笔记的快照数<input name="historyLimit" type="number" min="1" max="100" required value="'+preferences.historyLimit+'"></label>'+
-    checkbox('typewriter','打字机模式')+checkbox('paragraphFocus','段落聚焦')+
-    (mobile?checkbox('mobileLiveEditing','启用即时编辑（实验性）'):checkbox('vim','源码模式启用 Vim 键位'));
-  const formulas=checkbox('numberEquations','自动编号块级公式')+
-    '<label>KaTeX 宏<textarea name="macroInput" rows="4" maxlength="32000">'+
+  const directories=`<label>${tr("main.imageLocation")}<select name="attachmentStrategy">`+select('workspace',tr("main.workspaceRoot"))+select('note',tr("main.noteFolder"))+'</select></label>'+
+    field('workspaceAttachments',tr("main.workspaceAttachmentsFolder"))+field('noteAttachments',tr("main.noteAttachmentsFolderSupportsFilename"))+
+    field('newNoteDirectory',tr("main.vaultSubfolderForNewLinkedNotesLeave"))+
+    field('templateDirectory',tr("main.templatesFolderRelativeToWorkspace"))+
+    field('dailyDirectory',tr("main.dailyNotesFolderRelativeToWorkspace"))+
+    field('dailyFilePattern',tr("main.dailyNoteFilenameFormatYyyyMmDd"))+
+    field('dailyTemplate',tr("main.dailyNoteTemplateRelativeToWorkspaceOptional"));
+  const compression=checkbox('webpCompression',tr("main.convertLargePastedImagesToWebp"))+
+    `<label>${tr("main.maxWidthPx")}<input name="webpWidth" type="number" min="256" max="3840" required value="`+preferences.webpWidth+'"></label>'+
+    `<label>${tr("main.webpQuality")}<input name="webpQuality" type="number" min=".1" max="1" step=".01" required value="`+preferences.webpQuality+'"></label>';
+  const editing=`<label>${tr("main.snapshotsPerNote")}<input name="historyLimit" type="number" min="1" max="100" required value="`+preferences.historyLimit+'"></label>'+
+    checkbox('typewriter',tr("documentMenu.typewriterMode"))+checkbox('paragraphFocus',tr("documentMenu.paragraphFocus"))+
+    (mobile?checkbox('mobileLiveEditing',tr("main.enableLiveEditingExperimental")):checkbox('vim',tr("main.enableVimKeysInSource")));
+  const formulas=checkbox('numberEquations',tr("exportCenter.numberDisplayEquations"))+
+    `<label>${tr("main.katexMacros")}<textarea name="macroInput" rows="4" maxlength="32000">`+
     escape(Object.entries(preferences.macros||{}).map(([key,value])=>key+' = '+value).join('\n'))+'</textarea></label>';
-  const save='<p role="status"></p><div class="feature-buttons"><button class="primary" type="submit">保存设置</button></div>';
+  const save=`<p role="status"></p><div class="feature-buttons"><button class="primary" type="submit">${tr("main.saveSettings")}</button></div>`;
   panel.innerHTML=mobile?'<form class="lg-settings-form"><div class="lg-settings-scroll">'+
-    settingsGroup('目录与附件',directories)+settingsGroup('图片压缩',compression)+
-    settingsGroup('编辑体验',editing)+settingsGroup('公式宏',formulas)+
+    settingsGroup(tr("main.foldersAttachments"),directories)+settingsGroup(tr("main.imageCompression"),compression)+
+    settingsGroup(tr("main.editor"),editing)+settingsGroup(tr("main.mathMacros"),formulas)+
     '</div><div class="lg-footer">'+save+'</div></form>':
-    '<form>'+settingsGroup('目录与附件',directories)+settingsGroup('图片压缩',compression)+
-    settingsGroup('编辑体验',editing)+settingsGroup('公式宏',formulas)+'<div class="lg-footer">'+save+'</div></form>';
+    '<form>'+settingsGroup(tr("main.foldersAttachments"),directories)+settingsGroup(tr("main.imageCompression"),compression)+
+    settingsGroup(tr("main.editor"),editing)+settingsGroup(tr("main.mathMacros"),formulas)+'<div class="lg-footer">'+save+'</div></form>';
   const fields=panel.querySelector('form'),status=fields.querySelector('[role=status]'),button=fields.querySelector('[type=submit]');
   fields.addEventListener('submit',async event=>{
     event.preventDefault();
     button.disabled=true;
     try {
       await saveWritingSettings(new FormData(fields));
-      status.textContent='设置已保存。';
+      status.textContent=tr("main.settingsSaved");
     } catch(error) {
       status.textContent=errorMessage(error);
       fail(error);
@@ -1404,7 +1540,7 @@ async function saveWritingSettings(form) {
     const folder=candidate[key].trim();
     if (key==='newNoteDirectory'&&!folder) { candidate[key]=''; continue; }
     if (!folder || folder.replace(/^\.[\\/]/,'').split(/[\\/]/).some(part=>!part||/^[.]|[. ]$|[:*?"<>|]/.test(part))) {
-      throw Error('请输入相对工作区或文档目录的子目录路径。');
+      throw Error(tr("main.enterAPathRelativeToTheWorkspace"));
     }
     candidate[key]=folder;
   }
@@ -1415,7 +1551,7 @@ async function saveWritingSettings(form) {
   for (const key of ['templateDirectory','dailyDirectory','dailyTemplate']) {
     const value=String(candidate[key]||'').trim().replaceAll('\\','/');
     if (value && value.split('/').some(part=>!part||/^[.]|[. ]$|[:*?"<>|]/.test(part))) {
-      throw Error('模板和每日笔记设置需要工作区内的相对路径。');
+      throw Error(tr("main.templatesAndDailyNotesRequirePathsInside"));
     }
     candidate[key]=value;
   }
@@ -1430,25 +1566,25 @@ async function saveWritingSettings(form) {
   await platform.preferences.saveFeatures(candidate);
   preferences=candidate;
   if(mobileLayout()&&mode==='live'&&!candidate.mobileLiveEditing)await setMode('source');
-  updateVim();
+  await updateVim();
   refreshLiveMath(liveView(),preferences.macros);
   if(mode==='read')renderRead();
   workspaceFeatures?.refreshSplit();
   editorTools.updateFocus();
-  toast('设置已保存');
+  toast(tr("main.settingsSaved2"));
 }
 
 async function showExportSettings() {
   const pdf=preferences.pdf||{};
-  const form=await workspaceUI.ask('PDF 与公式设置',
-    '<label>纸张<select name="paper">'+['A4','A5','Letter'].map(paper=>'<option '+(pdf.paper===paper?'selected':'')+'>'+paper+'</option>').join('')+'</select></label>'+
-    '<label>上下边距（英寸）<input name="vertical" type="number" min=".25" max="2" step=".05" value="'+(pdf.vertical??.5)+'" required></label>'+
-    '<label>左右边距（英寸）<input name="horizontal" type="number" min=".25" max="2" step=".05" value="'+(pdf.horizontal??.55)+'" required></label>'+
-    '<label>页眉（可用 {{title}}）<input name="header" maxlength="160" value="'+escape(pdf.header||'')+'"></label>'+
-    '<label>页脚（可用 {{title}}）<input name="footer" maxlength="160" value="'+escape(pdf.footer||'')+'"></label>'+
-    settingToggle('pageNumbers','显示页码',{checked:pdf.pageNumbers})+
-    settingToggle('chapters','按一级标题分页',{checked:pdf.chapters})+
-    settingToggle('numberEquations','自动编号块级公式',{checked:preferences.numberEquations}),'保存设置');
+  const form=await workspaceUI.ask(tr("main.pdfMathSettings"),
+    `<label>${tr("exportCenter.paper")}<select name="paper">`+['A4','A5','Letter'].map(paper=>'<option '+(pdf.paper===paper?'selected':'')+'>'+paper+'</option>').join('')+'</select></label>'+
+    `<label>${tr("main.topAndBottomMarginsIn")}<input name="vertical" type="number" min=".25" max="2" step=".05" value="`+(pdf.vertical??.5)+'" required></label>'+
+    `<label>${tr("main.leftAndRightMarginsIn")}<input name="horizontal" type="number" min=".25" max="2" step=".05" value="`+(pdf.horizontal??.55)+'" required></label>'+
+    `<label>${tr("main.headerSupports")}<input name="header" maxlength="160" value="`+escape(pdf.header||'')+'"></label>'+
+    `<label>${tr("main.footerSupports")}<input name="footer" maxlength="160" value="`+escape(pdf.footer||'')+'"></label>'+
+    settingToggle('pageNumbers',tr("main.showPageNumbers"),{checked:pdf.pageNumbers})+
+    settingToggle('chapters',tr("exportCenter.pageBreakBeforeTopLevelHeadings"),{checked:pdf.chapters})+
+    settingToggle('numberEquations',tr("exportCenter.numberDisplayEquations"),{checked:preferences.numberEquations}),tr("main.saveSettings"));
   if(!form)return;
   preferences={...preferences,numberEquations:form.has('numberEquations'),pdf:{
     paper:form.get('paper'),vertical:Number(form.get('vertical')),horizontal:Number(form.get('horizontal')),
@@ -1465,12 +1601,12 @@ async function setWritingOption(action) {
   editorTools.updateFocus();
   if(mode==='live')liveView().focus();
   if(mode==='source')source.focus();
-  toast((action==='typewriter'?'打字机模式':'段落聚焦')+(preferences[key]?'已开启':'已关闭'));
+  toast((action==='typewriter'?tr("documentMenu.typewriterMode"):tr("documentMenu.paragraphFocus"))+(preferences[key]?tr("main.on"):tr("main.off2")));
 }
 
 let historyDialog, historyEditor, historySerial=0;
 async function showHistory(tab, conflict) {
-  if (!tab?.path) { if (!conflict) toast('请先保存笔记'); return; }
+  if (!tab?.path) { if (!conflict) toast(tr("main.saveTheNoteFirst2")); return; }
   if (tab===current()) flushLive();
   const serial=++historySerial;
   const snapshots=await platform.fs.history(tab.path).catch(error=>{if(conflict)return [];throw error;});
@@ -1486,20 +1622,30 @@ async function showHistory(tab, conflict) {
   }
   historyEditor?.destroy();
   historyEditor=null;
-  historyDialog.innerHTML='<header><h2>'+escape(conflict?.row?'同步冲突':conflict?'外部修改冲突':'版本历史')+'</h2><form method="dialog"><button aria-label="关闭版本历史">×</button></form></header>'+
-    '<p>'+escape(tab.name)+'　绿色为当前版本增加的内容，红色为选中版本原有的内容。</p>'+
-    '<div class="history-controls"><select aria-label="比较版本">'+(conflict?'<option value="disk">磁盘版本</option>':'')+
-    snapshots.map(row=>'<option value="'+escape(row.id)+'">'+escape(new Date(row.time).toLocaleString('zh-CN')+
-      (row.label?' · '+row.label:row.id==='legacy'?' · 旧备份':''))+'</option>').join('')+'</select>'+
-    '<button type="button" data-version="restore" hidden>恢复此版本</button><button type="button" data-version="copy" hidden>另存为新笔记</button>'+
-    (conflict?.row?'<button data-sync-choice="keep">保留当前版本</button><button data-sync-choice="apply">采用冲突版本覆盖</button>'+
-      (markdownPath.test(tab.path)?'<button data-sync-choice="manual">手动编辑合并</button>':''):conflict?'<button data-conflict="copy">另存为</button>':'')+
+  historyDialog.innerHTML='<header><h2>'+escape(conflict?.row?tr("main.syncConflict"):conflict?tr("main.externalChangeConflict"):tr("main.versionHistory"))+`</h2><form method="dialog"><button aria-label="${tr("main.closeVersionHistory")}">×</button></form></header>`+
+    '<p>'+escape(tab.name)+(conflict&&!conflict.row?'':`　${tr("main.greenMarksTextAddedInTheCurrent")}`)+'</p>'+
+    `<div class="history-controls"><select aria-label="${tr("main.compareVersions")}">`+(conflict?`<option value="disk">${tr("main.diskVersion")}</option>`:'')+
+    snapshots.map(row=>'<option value="'+escape(row.id)+'">'+escape(new Date(row.time).toLocaleString(getLocale())+
+      (row.label?' · '+row.label:row.id==='legacy'?` ${tr("main.earlierBackup")}`:''))+'</option>').join('')+'</select>'+
+    `<button type="button" data-version="restore" hidden>${tr("main.restoreThisVersion")}</button><button type="button" data-version="copy" hidden>${tr("main.saveAsNewNote")}</button>`+
+    (conflict?.row?`<button data-sync-choice="keep">${tr("main.keepCurrentVersion")}</button><button data-sync-choice="apply">${tr("main.useConflictVersion")}</button>`+
+      (markdownPath.test(tab.path)?`<button data-sync-choice="manual">${tr("main.mergeManually")}</button>`:''):conflict?`<button data-conflict="copy">${tr("main.saveAs2")}</button>`:'')+
     '</div><div class="history-diff"></div>';
   const select=historyDialog.querySelector('select');
   const parent=historyDialog.querySelector('.history-diff');
+  if(conflict&&!conflict.row){
+    const decisions=document.createElement('div');
+    decisions.className='feature-buttons';
+    decisions.innerHTML=`<button type="button" data-resolution="reload">${tr("dataSafety.loadDisk")}</button><button type="button" data-resolution="keep">${tr("dataSafety.overwrite")}</button>`;
+    decisions.addEventListener('click',event=>{
+      const choice=event.target.closest('button')?.dataset.resolution;
+      if(choice){historyDialog.close();resolveExternalNotice(choice,conflict).catch(fail);}
+    });
+    historyDialog.append(decisions);
+  }
   if(conflict?.row) {
     const versions=document.createElement('details');
-    versions.innerHTML='<summary>查看完整版本</summary><div class="sync-versions"><section><h3>当前版本</h3><pre></pre></section><section><h3>冲突版本</h3><pre></pre></section></div>';
+    versions.innerHTML=`<summary>${tr("main.viewFullVersion")}</summary><div class="sync-versions"><section><h3>${tr("main.currentVersion")}</h3><pre></pre></section><section><h3>${tr("main.conflictVersion")}</h3><pre></pre></section></div>`;
     const [ours,theirs]=versions.querySelectorAll('pre');
     ours.textContent=tab.text;theirs.textContent=conflict.text;
     historyDialog.append(versions);
@@ -1513,11 +1659,14 @@ async function showHistory(tab, conflict) {
     const id=select.value;
     selectedVersion=null;
     restore.hidden=copyVersion.hidden=true;
-    if(!id){parent.textContent='暂无历史快照';select.disabled=true;return;}
+    if(!id){parent.textContent=tr("main.noSnapshotsYet");select.disabled=true;return;}
     const before=id==='disk'?conflict.text:await platform.fs.history(tab.path,id);
     if(serial!==historySerial||version!==viewSerial)return;
     historyEditor?.destroy();
-    historyEditor=diffView(parent,before,tab.text);
+    parent.replaceChildren();
+    if(id==='disk'&&!conflict.row)
+      sideBySideDiff(parent,before,tab.text,[tr("main.diskVersion"),tr("dataSafety.myDraft")]);
+    else historyEditor=diffView(parent,before,tab.text);
     if(id!=='disk'){
       selectedVersion={id,text:before};
       restore.hidden=!id.startsWith('sync-')&&!tabs.includes(tab);
@@ -1530,16 +1679,16 @@ async function showHistory(tab, conflict) {
     restore.disabled=true;
     try{
       if(tab===current())flushLive();
-      if(tab.dirty||tab.conflict)throw Error('请先保存或另存当前草稿。');
+      if(tab.dirty||tab.conflict)throw Error(tr("main.saveYourDraftOrSaveItAs"));
       const {id,text}=selectedVersion;
       if(id.startsWith('sync-'))await platform.sync.restoreVersion(tab.path,id);
       else {
-        const saved=await platform.fs.save({path:tab.path,text,saved:tab.saved,mtime:tab.mtime});
-        if(!saved||saved.conflict)throw Error('文件已修改，请重新打开版本历史。');
+        const saved=await platform.fs.save({path:tab.path,text,saved:tab.saved,mtime:tab.mtime,snapshot:tab.snapshot});
+        if(!saved||saved.conflict)throw Error(tr("main.theFileChangedReopenVersionHistory"));
       }
       if(tabs.includes(tab))await updateTabsFromDisk({root,changes:[{path:tab.path,type:'change'}]});
       historyDialog.close();
-      toast('已恢复历史版本');
+      toast(tr("main.versionRestored"));
     }catch(error){fail(error);}
     finally{restore.disabled=false;}
   };
@@ -1547,13 +1696,13 @@ async function showHistory(tab, conflict) {
     if(!selectedVersion||copyVersion.disabled)return;
     copyVersion.disabled=true;
     try{
-      const name=tab.name.replace(/\.(?:md|markdown|mdown)$/i,'')+'（历史版本）.md';
+      const name=tab.name.replace(/\.(?:md|markdown|mdown)$/i,'')+tr("main.historicalVersionMd");
       const saved=await platform.fs.save({name,text:selectedVersion.text,saveAs:true});
       if(saved?.path){
         historyDialog.close();
         files=await platform.workspace.tree();
         await openFile(saved.path);
-        toast('已另存为新笔记');
+        toast(tr("main.savedAsANewNote"));
       }
     }catch(error){fail(error);}
     finally{copyVersion.disabled=false;}
@@ -1592,7 +1741,7 @@ async function reopenClosed() {
     }
     return openFile(path);
   }
-  toast('没有可重新打开的文档');
+  toast(tr("main.noNotesToReopen"));
 }
 function installTabActions() {
   const bar=$('#tabs');
@@ -1632,11 +1781,11 @@ function installFeatures() {
     relative:relativePath,key:fileKey,onError:fail});
   $('#file-sort').addEventListener('click', async () => {
     try {
-      const options = [['name','名称（自然数字顺序）'],['modified','最近修改'],['created','创建时间']];
-      const form = await workspaceUI.ask('文件排序','<label>排序方式<select name="sort">'+
+      const options = [['name',tr("main.nameNaturalOrder")],['modified',tr("main.modified")],['created',tr("main.created")]];
+      const form = await workspaceUI.ask(tr("main.sortFiles"),`<label>${tr("main.sortOrder")}<select name="sort">`+
         options.map(([value,label])=>'<option value="'+value+'" '+(treeSort===value?'selected':'')+'>'+label+'</option>').join('')+
-        '</select></label>'+(mobileLayout()?settingToggle('descending','降序',{checked:treeDescending}):
-          settingToggle('descending','降序',{checked:treeDescending})));
+        '</select></label>'+(mobileLayout()?settingToggle('descending',tr("main.descending"),{checked:treeDescending}):
+          settingToggle('descending',tr("main.descending"),{checked:treeDescending})));
       if (!form) return;
       treeSort=form.get('sort');
       treeDescending=form.has('descending');
@@ -1653,6 +1802,34 @@ function installFeatures() {
       }
     },{passive:true});
   }
+  activityView=createActivityView({platform,root:()=>root,escape,ask:(...args)=>workspaceUI.ask(...args),
+    toast,fail,openFile,applyUndo:(entry,token)=>lockWorkspace(async()=>{
+      flushLive();
+      const affected=new Set(entry.files.map(row=>fileKey((row.path||row.from).replaceAll('\\','/'))));
+      const currentRoot=root.replaceAll('\\','/').replace(/\/$/,'');
+      if(entry.type!=='trash'&&tabs.some(tab=>tab.path&&tab.dirty&&affected.has(fileKey(tab.path.replaceAll('\\','/').slice(currentRoot.length+1)))))
+        throw Error(tr('activity.unsavedDraft'));
+      const result=await platform.activity.undo(entry.id,token);
+      if(!result.activity)return result;
+      files=result.tree;
+      const changed=new Map(result.affected.filter(row=>row.from).map(row=>[fileKey(row.from),row.path]));
+      for(const tab of tabs.filter(tab=>tab.path)){
+        const next=changed.get(fileKey(tab.path));
+        if(!next)continue;
+        const disk=await platform.fs.read(next,true);
+        if(!disk)continue;
+        if(next!==tab.path)delete tab.liveState;
+        tab.path=next;
+        tab.name=base(next);
+        replaceFromDisk(tab,disk);
+      }
+      if(result.from&&result.path){
+        for(const bookmark of workspaceState().bookmarks)if(containsPath(result.from,bookmark.path,fileKey))
+          bookmark.path=result.path+bookmark.path.slice(result.from.length);
+      }
+      await refreshWorkspaceView();
+      return result;
+    })});
   workspaceUI=createWorkspaceUI({
     platform,$,escape,base,active:current,getRoot:()=>root,getTabs:()=>tabs,getTree:()=>files,
     setTree(rows,edit,result){
@@ -1669,23 +1846,24 @@ function installFeatures() {
       if(edit.type==='note'||edit.type==='folder')expanded.add(edit.parent);
       if(expanded.delete(edit.path)&&result.path)expanded.add(result.path);
     },
-    refresh:refreshWorkspaceView,openFile,flush:flushLive,withLocked:lockWorkspace,toast,fail,settings:()=>preferences
+    refresh:refreshWorkspaceView,openFile,flush:flushLive,withLocked:lockWorkspace,toast,fail,
+    notifyActivity:activityView.notify,settings:()=>preferences
   });
   const readText=async path=>tabs.find(tab=>tab.path===path)?.text ?? (await platform.fs.read(path)).text;
   const updateNote=updatePkmNote=async (path,previous,text)=>{
     const tab=findDocumentTab(path);
     if(tab){
       if(tab===current())flushLive();
-      if(tab.text!==previous)throw Error('笔记已变化，请刷新后重试。');
+      if(tab.text!==previous)throw Error(tr("main.theNoteChangedRefreshAndTryAgain"));
       if(tab===current())applyEditorText(text);
       else {tab.text=text;tab.dirty=text!==tab.saved;}
-      if(!await save(tab))throw Error('修改仍保留在草稿中，请先解决保存冲突。');
+      if(!await save(tab))throw Error(tr("main.yourChangesAreInTheDraftResolve"));
       return;
     }
     const disk=await platform.fs.read(path);
-    if(disk.text!==previous)throw Error('笔记已变化，请刷新后重试。');
-    const result=await platform.fs.save({path,text,saved:disk.text,mtime:disk.mtime});
-    if(!result||result.conflict)throw Error('笔记已被其他程序修改。');
+    if(disk.text!==previous)throw Error(tr("main.theNoteChangedRefreshAndTryAgain"));
+    const result=await platform.fs.save({path,text,saved:disk.text,mtime:disk.mtime,snapshot:disk.snapshot});
+    if(!result||result.conflict)throw Error(tr("main.anotherProgramChangedThisNote"));
   };
   noteWorkflows=createNoteWorkflows({platform,ask:workspaceUI.ask,escape,getRoot:()=>root,files:flat,relative:relativePath,read:readText,
     active:current,applyText:applyEditorText,insert:markdown=>editorTools.insertTemplate(markdown),open:openFile,updateNote,
@@ -1733,12 +1911,12 @@ function installFeatures() {
       const text=findDocumentTab(target.path)?.text ?? (await platform.fs.read(target.path)).text;
       preview.innerHTML=renderMarkdown(liveNote(text).body);
       if(target.heading)preview.replaceChildren(...sectionNodes(preview,target.heading));
-      if(!preview.hasChildNodes())preview.textContent='找不到链接目标章节';
+      if(!preview.hasChildNodes())preview.textContent=tr("main.linkedHeadingNotFound");
       for(const anchor of preview.querySelectorAll('a'))anchor.dataset.noteSource=target.path;
       await resolveImages(preview,target.path);
     }else if(isWiki){
       const [detail]=await platform.index.links({source:path,destinations:[destination]});
-      preview.textContent=detail?.status==='ambiguous'?'有多篇同名笔记，请在体检中指定目标。':'笔记尚未创建。';
+      preview.textContent=detail?.status==='ambiguous'?tr("main.severalNotesMatchThisNameSelectA"):tr("main.thisNoteHasNotBeenCreated");
     }else return;
     if(serial!==previewSerial)return;
     const label=target?base(target.path):destination;
@@ -1747,7 +1925,7 @@ function installFeatures() {
         const open=document.createElement('button');
         open.type='button';
         open.className='primary';
-        open.textContent=target?'打开原稿':'查看链接';
+        open.textContent=target?tr("main.openOriginal"):tr("main.viewLink");
         open.onclick=()=>{close();wiki(destination,isWiki,path).catch(fail);};
         content.append(preview,open);
       });
@@ -1894,29 +2072,38 @@ async function prepareExport(tab,options,selection) {
   await Promise.all([...div.querySelectorAll('img')].map(async img=>{
     if(img.src.startsWith('note-image:')||platform.export.isLocalImage?.(img.src))img.src=await platform.export.image(img.src);
   }));
+  const {organizeExport}=await loadExportCenter();
   organizeExport(div,options);
   return div;
 }
-function exportMathCSS(div) {
-  return div.querySelector('.katex')?katexCSS.replace(/url\(fonts\/([^)]+\.woff2)\)\s*format\("woff2"\)(?:\s*,[^;}]+)?/g,
-    (_,font)=>'url('+mathFonts['../node_modules/katex/dist/fonts/'+font]+') format("woff2")'):'';
+async function exportMathCSS(div) {
+  if(!div.querySelector('.katex'))return '';
+  const {default:katexCSS}=await import('katex/dist/katex.min.css?raw');
+  const pattern=/url\(fonts\/([^)]+\.woff2)\)\s*format\("woff2"\)(?:\s*,[^;}]+)?/g;
+  const needed=[...new Set([...katexCSS.matchAll(pattern)].map(match=>match[1]))];
+  const resolved=Object.fromEntries(await Promise.all(needed.map(async font=>{
+    const loader=mathFonts['../node_modules/katex/dist/fonts/'+font];
+    return [font,loader?await loader():''];
+  })));
+  return katexCSS.replace(pattern,(_,font)=>resolved[font]?'url('+resolved[font]+') format("woff2")':'');
 }
 function defaultExportPreferences() {
   return {...exportDefaults,...preferences.pdf,numberEquations:!!preferences.numberEquations,...preferences.exportOptions};
 }
 async function saveExport(format,tab,settings,selection) {
-  toast('正在生成 '+format.toUpperCase()+'…');
-  const div=await prepareExport(tab,settings,selection);
+  toast(`${tr("main.generating")} `+format.toUpperCase()+'…');
+  const [{exportStyle,htmlDocument},div]=await Promise.all([loadExportCenter(),prepareExport(tab,settings,selection)]);
   if (['docx','epub'].includes(format)) for(const formula of div.querySelectorAll('.katex')) {
     const math=formula.querySelector('math');
     if(math)formula.replaceWith(math);
   }
-  const html=htmlDocument(tab.name,'<main>'+div.innerHTML+'</main>',exportMathCSS(div)+exportStyle(settings,format),format==='html');
+  const mathCSS=await exportMathCSS(div);
+  const html=htmlDocument(tab.name,'<main>'+div.innerHTML+'</main>',mathCSS+exportStyle(settings,format),format==='html');
   const name=tab.name.replace(noteExtension,'');
   const done=format==='pdf'?await platform.export.pdf(html,{...settings,title:name}):
     ['docx','epub'].includes(format)?await platform.export.pandoc({format,html,name}):
     await platform.export.document({format,html,name,...(format==='png'?{width:settings.pngWidth,scale:settings.pngScale}:{})});
-  if(done)toast(done==='print'?'已打开系统打印，请选择「另存为 PDF」。':format.toUpperCase()+' 已导出');
+  if(done)toast(done==='print'?tr("main.systemPrintingOpenedSelectSaveAsPdf"):format.toUpperCase()+` ${tr("main.exported")}`);
   return done;
 }
 async function exportDocument(format) {
@@ -1925,22 +2112,23 @@ async function exportDocument(format) {
   if(!tab)return;
   let selection=format==='png'?selectedExportContent(tab):null;
   if(format==='png') {
-    const form=await workspaceUI.ask('导出图片',
-      '<label>内容<select name="scope"><option value="all">整篇阅读长图</option>'+
-      (selection?'<option value="selected" selected>选中内容卡片</option>':'')+'</select></label>','导出 PNG');
+    const form=await workspaceUI.ask(tr("main.exportImage"),
+      `<label>${tr("canvasView.content")}<select name="scope"><option value="all">${tr("main.entireNoteAsLongImage")}</option>`+
+      (selection?`<option value="selected" selected>${tr("main.selectionAsCard")}</option>`:'')+'</select></label>',tr("main.exportPng"));
     if(!form)return;
     if(form.get('scope')==='all')selection=undefined;
   }
   return saveExport(format,tab,defaultExportPreferences(),selection);
 }
-function openExportCenter(initial='pdf',tab=current(),includeSelection=tab===current()) {
+async function openExportCenter(initial='pdf',tab=current(),includeSelection=tab===current()) {
   flushLive();
   if(!tab)return;
   const selection=includeSelection?selectedExportContent(tab):undefined;
+  const {showExportCenter}=await loadExportCenter();
   showExportCenter({initial,formats:platform.export.formats,preferences:defaultExportPreferences(),selection,fail,
     async render(options,selected) {
       const div=await prepareExport(tab,options,selected&&selection);
-      return {title:tab.name,body:div.innerHTML,mathCSS:exportMathCSS(div)};
+      return {title:tab.name,body:div.innerHTML,mathCSS:await exportMathCSS(div)};
     },
     async save(format,options,selected) {
       const done=await saveExport(format,tab,options,selected&&selection);
@@ -1956,30 +2144,30 @@ async function copyRichText(selection) {
   flushLive();
   const tab=current();
   if(!tab)return;
-  const div=await prepareExport(tab,defaultExportPreferences(),selection??selectedExportContent(tab));
+  const [{inlineRichStyles},div]=await Promise.all([loadExportCenter(),prepareExport(tab,defaultExportPreferences(),selection??selectedExportContent(tab))]);
   const plain=div.innerText||div.textContent;
   const rich=await platform.export.rich({html:'<div>'+inlineRichStyles(div)+'</div>',text:plain});
-  toast(rich===false?'已复制纯文本':'富文本已复制');
+  toast(rich===false?tr("main.plainTextCopied"):tr("main.richTextCopied"));
 }
 
 async function exportMarkdownPackage() {
   flushLive();
   const tab=current();
-  if(!tab?.path) {toast('请先保存笔记，再打包相对路径附件。');return;}
+  if(!tab?.path) {toast(tr("main.saveTheNoteBeforeBundlingRelativePath"));return;}
   if(nativeMobile){
-    if(await platform.export.markdown({note:tab.path,text:tab.text,format:'zip'}))toast('Markdown 便携包已导出');
+    if(await platform.export.markdown({note:tab.path,text:tab.text,format:'zip'}))toast(tr("main.portableMarkdownBundleExported"));
     return;
   }
-  const fields=await workspaceUI.ask('导出便携 Markdown 包',
-    '<label>输出<select name="format"><option value="zip">ZIP 压缩包</option><option value="folder">独立文件夹</option></select></label>',
-    '导出便携包');
-  if(fields&&await platform.export.markdown({note:tab.path,text:tab.text,format:fields.get('format')})) toast('Markdown 便携包已导出');
+  const fields=await workspaceUI.ask(tr("main.exportPortableMarkdownBundle"),
+    `<label>${tr("main.output")}<select name="format"><option value="zip">${tr("main.zipArchive")}</option><option value="folder">${tr("main.standaloneFolder")}</option></select></label>`,
+    tr("main.exportBundle"));
+  if(fields&&await platform.export.markdown({note:tab.path,text:tab.text,format:fields.get('format')})) toast(tr("main.portableMarkdownBundleExported"));
 }
 
 let quitPending=false;
 async function quitWorkspace(){
   if(quitPending)return;
-  if(workspaceBusy){toast('文件操作进行中，请稍候');return;}
+  if(workspaceBusy){toast(tr("main.aFileActionIsRunningPleaseWait2"));return;}
   quitPending=true;
   try {
     if(!await workspaceFeatures.beforeQuit())return;
@@ -2002,7 +2190,7 @@ function openExternalFiles(paths) {
     try {
       status.hidden = false;
       for (const p of paths) {
-        status.textContent = `正在打开 ${base(p)}…`;
+        status.textContent = tr("main.opening",{arg1:base(p)});
         await openFile(p);
       }
     } finally {
@@ -2015,23 +2203,14 @@ function openExternalFiles(paths) {
 async function installExternalMarkdown() {
   if(!platform.events.externalFile)return;
   let preview,queue=Promise.resolve();
-  const receive=()=>{
-    queue=queue.then(async()=>{
-      const file=await platform.fs.consumeExternalFile();
-      if(file.error){
-        if(preview?.dialog.open)preview.message(file.error);
-        else toast(file.error);
-        return;
-      }
-      if(!file.name||typeof file.text!=='string')return;
-      preview?.dialog.close();
-      const opened=showExternalMarkdown(file,{
+  function show(file){
+    const opened=showExternalMarkdown(file,{
         async render(body,text){
           await renderContent(body,text,null,undefined,undefined,undefined,{...preferences,externalPreview:true});
           await renderDiagrams(body);
         },
         async importNote(file){
-          if(!root||workspaceBusy)throw Error('当前知识库不可用，请稍后再试。');
+          if(!root||workspaceBusy)throw Error(tr("main.theCurrentVaultIsUnavailableTryAgain"));
           await lockWorkspace(async()=>{
             const {path}=await platform.fs.importExternalFile(root,file);
             files=await platform.workspace.tree();
@@ -2043,8 +2222,20 @@ async function installExternalMarkdown() {
         exportNote:(format,{name,text})=>saveExport(format,{name,text,path:null,externalPreview:true},defaultExportPreferences()),
         openLink:url=>platform.window.external(url)
       });
-      preview=opened;
-      opened.dialog.addEventListener('close',()=>{if(preview===opened)preview=null;},{once:true});
+    preview=opened;
+    opened.dialog.addEventListener('close',()=>{
+      if(preview===opened)preview=null;
+      receive();
+    },{once:true});
+  }
+  const receive=()=>{
+    queue=queue.then(async()=>{
+      while(!preview?.dialog.open){
+        const file=await platform.fs.consumeExternalFile();
+        if(file.error)toast(file.error);
+        else if(file.name&&typeof file.text==='string')show(file);
+        else break;
+      }
     }).catch(fail);
     return queue;
   };
@@ -2070,7 +2261,7 @@ function toggleMoreMenu() {
   if(mobileLayout()){
     return showMobileDocumentMenu(tab,groups);
   }
-  floatingMenus.open({id:'more-menu',label:'更多文档操作',trigger:$('[data-action="more"]'),groups});
+  floatingMenus.open({id:'more-menu',label:tr("main.moreNoteActions"),trigger:$('[data-action="more"]'),groups});
 }
 
 function showMobileDocumentMenu(tab,groups) {
@@ -2081,37 +2272,38 @@ function showMobileDocumentMenu(tab,groups) {
     .filter(item=>['exportCenter','pdf','png','html','portableMarkdown','copyRich'].includes(item.id)&&
       (item.id!=='pdf'||desktop||platform.export.formats?.includes('pdf')))
     .map(item=>({...item,icon:item.id==='copyRich'?'copy':item.id==='exportCenter'?'settings-2':'file-down'}));
-  const views={label:'视图切换',icon:'panel-top',disabled:!tab,
-    items:[['live','即时编辑'],['source','源码'],['read','阅读']]
+  const views={label:tr("main.viewMode"),icon:'panel-top',disabled:!tab,
+    items:[['live',tr("main.live")],['source',tr("main.source")],['read',tr("main.read")]]
       .filter(([id])=>id!=='live'||preferences.mobileLiveEditing)
       .map(([id,label])=>command(label,'file-text',()=>setMode(id)))};
   const format=pick('format','list-ordered');
-  mobileShell.show('文档操作',[
-    {label:'快捷操作',style:'tiles',items:[
-      command('大纲与反链','list-tree',()=>mobileShell.openDrawer('right'),!tab),
-      command('书签','bookmark',()=>action('bookmarks'),!root),
-      {id:'export',label:'导出',icon:'share',disabled:!tab,items:exportItems},
-      command('全库图谱','network',()=>action('graph'),!root)
+  mobileShell.show(tr("main.noteActions"),[
+    {label:tr("main.quickActions"),style:'tiles',items:[
+      command(tr("main.outline2"),'list-tree',()=>mobileShell.openDrawer('right'),!tab),
+      command(tr("main.bookmark"),'bookmark',()=>action('bookmarks'),!root),
+      {id:'export',label:tr("documentMenu.export"),icon:'share',disabled:!tab,items:exportItems},
+      command(tr("main.quickGraph"),'network',()=>action('graph'),!root)
     ]},
-    {label:'当前笔记',style:'rows',items:[
-      pick('renameNote','pencil','重命名'),command('移动到文件夹…','folder-input',()=>documentFileAction('move'),!canBookmark(tab)),pick('properties','list-checks','笔记属性'),
-      {...format,disabled:!tab},pick('template','file-plus-2','插入模板'),pick('history','history','版本历史'),views
+    {label:tr("main.currentNote"),style:'rows',items:[
+      pick('renameNote','pencil',tr("documentMenu.rename")),command(tr("documentMenu.moveToFolder"),'folder-input',()=>documentFileAction('move'),!canBookmark(tab)),pick('properties','list-checks',tr("main.noteProperties")),
+      {...format,disabled:!tab},pick('template','file-plus-2',tr("main.insertTemplate")),pick('history','history',tr("main.versionHistory")),views
     ]},
-    {label:'知识库',style:'rows',items:[
-      command('知识库体检','heart-pulse',()=>action('vaultHealth'),!root),
-      command('打开今日笔记','calendar-days',()=>action('daily'),!root),
-      command('随机打开笔记','shuffle',()=>action('random'),!root)
+    {label:tr("main.vault"),style:'rows',items:[
+      command(tr("main.vaultCheck"),'heart-pulse',()=>action('vaultHealth'),!root),
+      command(tr("main.openDailyNote"),'calendar-days',()=>action('daily'),!root),
+      command(tr("main.openRandomNote"),'shuffle',()=>action('random'),!root),
+      command(tr("activity.title"),'history',()=>action('activity'),!root)
     ]},
-    {label:'应用设置',style:'rows',items:[
-      command('外观','sun-moon',showMobileAppearance),
-      command('设置中心','settings',()=>action('settings'))
+    {label:tr("main.appSettings"),style:'rows',items:[
+      command(tr("main.appearance2"),'sun-moon',showMobileAppearance),
+      command(tr("main.settings"),'settings',()=>action('settings'))
     ]},
-    {label:'危险操作',style:'danger',items:[pick('trashNote','trash-2','删除当前笔记')]}
+    {label:tr("documentMenu.dangerZone"),style:'danger',items:[pick('trashNote','trash-2',tr("main.deleteCurrentNote"))]}
   ]);
 }
 
 function showMobileAppearance() {
-  mobileShell.panel('晶曜工作台','appearance',mountAppearance);
+  mobileShell.panel(tr("main.appearance"),'appearance',mountAppearance);
 }
 
 function syncPanelButtons() {
@@ -2226,7 +2418,7 @@ async function action(a){
       revealActiveFile();
       renderSide();
       backlinks().catch(fail);
-      return toast('文件列表已刷新');
+      return toast(tr("main.fileListRefreshed"));
     case 'save': return save(workspaceFeatures.focusedTab()||current());
     case 'saveAs': return save(current(),true);
     case 'palette': return palette();
@@ -2245,18 +2437,19 @@ async function action(a){
       for (const tab of tabs) scheduleSave(tab);
       stats();
       session();
-      return toast('自动保存已'+(autoSave?'开启':'关闭'));
+      return toast(tr("main.autoSave",{arg1:autoSave?tr("main.onShort"):tr("main.offShort")}));
     case 'find': return editorTools.find();
     case 'live': case 'source': case 'read': return setMode(a);
     case 'pdf': case 'html': case 'png': return exportDocument(a);
     case 'history': return showHistory(current(),current()?.conflict);
+    case 'activity': return activityView.open();
     case 'settings': return settingsCenter.open();
     case 'typewriter': case 'paragraph': return setWritingOption(a);
-    case 'reveal': return current()?.path ? platform.fs.reveal(current().path) : toast('请先保存文档');
+    case 'reveal': return current()?.path ? platform.fs.reveal(current().path) : toast(tr("main.saveTheNoteFirst"));
     case 'more': return toggleMoreMenu();
     case 'help': {
-      const tab = tabs.find(item=>item.name==='使用指南.md');
-      return tab ? activate(tab.id) : newDocument(guide,'使用指南.md');
+      const tab = tabs.find(item=>item.builtin==='guide');
+      return tab ? activate(tab.id) : newDocument(guide(),tr('main.guideName'),'guide');
     }
     case 'quit': return quitWorkspace();
   }
@@ -2311,7 +2504,8 @@ function changeWorkspace(choose) {
     await refreshWorkspaceView();
     if(nativeMobile&&workspace.initialFiles?.length&&!tabs.some(tab=>tab.path))await openExternalFiles(workspace.initialFiles);
     if(nativeMobile)syncStatus(await platform.sync.status());
-    toast(workspace.warning||(workspace.deletedVault?'已删除知识库':old?'已重命名知识库':root?'已打开 '+base(root):'已关闭工作区'));
+    if(root)await checkOpenTabs();
+    toast((workspace.recovered==='quarantined'?tr('dataSafety.recoverQuarantined'):workspace.recovered?tr('dataSafety.recovered'):workspace.warning)||(workspace.deletedVault?tr("main.vaultDeleted"):old?tr("main.vaultRenamed"):root?`${tr("main.opened")} `+base(root):tr("main.workspaceClosed")));
     return workspace;
   });
 }
@@ -2338,7 +2532,7 @@ function syncDocumentButtons(tab=current()) {
   $('#export-quick').disabled=$('#split-quick').disabled=!tab;
   const star=$('#document-star'), enabled=canBookmark(tab);
   const marked=enabled&&bookmarkIndex(tab.path)>=0;
-  const label=marked?'取消收藏当前文档':'收藏当前文档';
+  const label=marked?tr("main.removeBookmarkFromCurrentNote"):tr("main.bookmarkCurrentNote");
   star.disabled=!enabled;
   star.setAttribute('aria-pressed',marked);
   star.setAttribute('aria-label',label);
@@ -2349,32 +2543,36 @@ function toggleDocumentBookmark(file=current()?.path) {
   const bookmarks=workspaceState().bookmarks;
   const index=bookmarkIndex(file);
   if(index<0)return workspaceFeatures.addBookmark(file);
-  bookmarks.splice(index,1);session();syncDocumentButtons();toast('已取消收藏');
+  bookmarks.splice(index,1);session();syncDocumentButtons();toast(tr("main.bookmarkRemoved"));
 }
 
 function documentWiki(file,heading) {
-  const relative=relativePath(file).replace(noteExtension,'').replace(/[\[\]#|]/g,encodeURIComponent);
-  return '[['+relative+(heading?'#'+heading.replace(/[\[\]#|]/g,encodeURIComponent):'')+']]';
+  const relative=encodeWiki(relativePath(file).replace(noteExtension,''));
+  return '[['+relative+(heading?'#'+encodeWiki(heading):'')+']]';
 }
 
 async function copyDocumentPath(type,file=current()?.path) {
   if(!file)return;
   const text=type==='absolute'?file:type==='relative'?relativePath(file):documentWiki(file);
-  await platform.clipboard.writeText(text);toast('已复制');
+  await platform.clipboard.writeText(text);toast(tr("main.copied"));
 }
 
-function mountAttachmentSettings(panel,{mobile}) {
-  if(!persisted||!root){panel.textContent='请在应用中打开工作区后扫描附件。';return;}
+async function mountAttachmentSettings(panel,{mobile,signal}) {
+  if(!persisted||!root){panel.textContent=tr("main.openAWorkspaceInTheAppBefore");return;}
+  const {mountAttachments}=await import('./attachments.js');
+  if(signal?.aborted)return;
   const drafts=()=>{flushLive();return tabs.filter(tab=>tab.path&&tab.dirty&&!tab.deleted).map(({path,text})=>({path,text}));};
   mountAttachments(panel,{mobile,icon,glyphs,scan:()=>platform.attachments.scan(drafts()),trash:paths=>platform.attachments.trash({paths,drafts:drafts()}),
-    confirm:async count=>Boolean(await workspaceUI.ask('清理孤立图片','', '移入回收站','将选中的 '+count+' 张图片移入'+(nativeMobile?' Vault 内的 .trash。':'系统回收站。'))),escape,fail});
+    confirm:async count=>Boolean(await workspaceUI.ask(tr("main.cleanUpUnusedImages"),'', tr("attachments.moveToTrash"),`${tr("main.moveTheSelected")} `+count+` ${tr("main.imagesTo")}`+(nativeMobile?` ${tr("main.theVaultSTrashFolder")}`:tr("main.theSystemTrash")))),escape,fail});
 }
 
-function mountWorkspaceSync(panel,lifecycle) {
-  if(!persisted||!root){panel.textContent='请打开工作区后配置同步。';return;}
+async function mountWorkspaceSync(panel,lifecycle) {
+  if(!persisted||!root){panel.textContent=tr("main.openAWorkspaceBeforeConfiguringSync");return;}
+  const {mountSyncSettings}=await import('./sync-settings.js');
+  if(lifecycle.signal?.aborted)return;
   const dir=root;
   const sync=nativeMobile?Object.fromEntries(Object.entries(platform.sync).map(([key,call])=>[key,(...args)=>{
-    if(dir!==root||lifecycle.signal.aborted)throw Error('同步设置已关闭，请重新打开后再操作。');
+    if(dir!==root||lifecycle.signal.aborted)throw Error(tr("main.syncSettingsClosedOpenThemAgainTo"));
     return call(...args);
   }])):platform.sync;
   return mountSyncSettings(panel,{...lifecycle,sync,subscribe:platform.events.sync,
@@ -2399,18 +2597,15 @@ async function showSyncHistory(path) {
 async function resolveSyncRow(row,choice) {
   const tab=findDocumentTab(row.path);
   if(tab===current())flushLive();
-  if(choice==='apply'&&tab?.dirty)throw Error('当前草稿有未保存的修改，请先保存或另存草稿。');
+  if(choice==='apply'&&tab?.dirty)throw Error(tr("main.theDraftHasUnsavedChangesSaveIt"));
   if(choice==='archive'&&row.copy&&(!tab||tab.deleted)){
     const copyTab=findDocumentTab(row.copy);
-    if(copyTab?.dirty&&!await save(copyTab))throw Error('请先保存手动合并结果。');
+    if(copyTab?.dirty&&!await save(copyTab))throw Error(tr("main.saveTheManualMergeFirst"));
     if((await platform.sync.conflictFiles(row.copy||row.path)).local.missing)choice='apply';
   }
   if(choice!=='apply'&&tab?.dirty) {
-    if(tab.conflict) {
-      const latest=await platform.fs.read(tab.path);
-      replaceFromDisk(tab,latest,true);
-    }
-    if(!await save(tab))throw Error('请先保存当前草稿。');
+    if(tab.conflict)throw Error(tr("main.yourChangesAreInTheDraftResolve"));
+    if(!await save(tab))throw Error(tr("main.saveTheCurrentDraftFirst"));
   }
   const result=await platform.sync.resolve(row.copy||row.path,choice);
   manualSyncConflict=null;
@@ -2422,8 +2617,8 @@ function drawSyncConflict() {
   const editing=manualSyncConflict&&tab?.path&&
     (fileKey(manualSyncConflict.path)===fileKey(tab.path)||manualSyncConflict.copy&&fileKey(manualSyncConflict.copy)===fileKey(tab.path));
   banner.hidden=!currentSyncState?.settings?.enabled||!row&&!editing;
-  banner.querySelector('span').textContent=editing?'保存手动合并结果后，可归档冲突副本。':'同步已保留冲突副本。';
-  banner.querySelector('button').textContent=editing?'标记已解决':'查看同步冲突';
+  banner.querySelector('span').textContent=editing?tr("main.saveTheManualMergeBeforeArchivingThe"):tr("main.syncKeptAConflictCopy");
+  banner.querySelector('button').textContent=editing?tr("main.markResolved"):tr("main.viewSyncConflicts");
 }
 $('#sync-conflict-banner').addEventListener('click',async event=>{
   if(!event.target.closest('button'))return;
@@ -2440,13 +2635,14 @@ $('#sync-conflict-banner').addEventListener('click',async event=>{
 });
 function syncStatus(value) {
   currentSyncState=value;
-  const button=$('#sync-status'),label=syncLabel(value);
+  const button=$('#sync-status'),label=syncLabel(value,true);
   button.textContent=label;
+  button.title=syncLabel(value);
   button.dataset.state=value.status;
   const backup=value.logs?.find(row=>row.backup);
   if(backup&&backup.time!==lastSyncBackup){
     lastSyncBackup=backup.time;
-    toast(backup.message);
+    toast(syncMessage(backup));
   }
   if(syncPopover.matches(':popover-open'))drawDesktopSync();
   mobileShell?.sync(mobileSyncValue(value));
@@ -2458,9 +2654,9 @@ function drawDesktopSync() {
   const value=currentSyncState;
   if(!value)return;
   const {settings,status,progress,port}=value;
-  const detail=settings.mode==='lan'&&port?'局域网共享 · 端口 '+port:'';
+  const detail=settings.mode==='lan'&&port?`${tr("main.lanSharingPort")} `+port:'';
   syncPopover.querySelector('[role=status]').textContent=[syncLabel(value),detail,
-    status==='pending'&&value.logs[0]?.message].filter(Boolean).join(' · ');
+    status==='pending'&&syncMessage(value.logs[0])].filter(Boolean).join(' · ');
   const meter=syncPopover.querySelector('progress');
   meter.hidden=status!=='working';
   if(progress?.total) {
@@ -2503,7 +2699,7 @@ if(desktop) {
     }catch(error){fail(error);}
   };
   syncPopover.querySelector('[data-copy-pair]').onclick=()=>{
-    if(quickPair)platform.clipboard.writeText(quickPair.packet).then(()=>toast('已复制配对串')).catch(fail);
+    if(quickPair)platform.clipboard.writeText(quickPair.packet).then(()=>toast(tr("main.pairingCodeCopied"))).catch(fail);
   };
 }
 
@@ -2511,9 +2707,9 @@ function mobileSyncValue(value) {
   const connected=Boolean(value?.settings.enabled&&configured(value.settings));
   const status=connected||['error','conflict'].includes(value?.status)?value.status:'local';
   const summary=status==='error'?'error':connected&&status!=='synced'?'pending':status;
-  return {...value,connected,status,summary,summaryLabel:vaultStatusLabels[summary],
-    label:status==='local'?vaultStatusLabels.local:syncLabel(value),
-    detail:status==='error'?value.logs[0]?.message:status==='local'?vaultStatusLabels.local:syncLabel(value)};
+  return {...value,connected,status,summary,summaryLabel:vaultStatusLabels()[summary],
+    label:status==='local'?vaultStatusLabels().local:syncLabel(value,true),
+    detail:status==='error'?syncMessage(value.logs[0]):status==='local'?vaultStatusLabels().local:syncLabel(value)};
 }
 
 function showMobileSync() {
@@ -2536,10 +2732,36 @@ function mountShortcutSettings(panel) {
     preferences=next;
   }});
 }
-const settingsCenter=createSettingsCenter({icon,glyphs,fail,mount:{
+const settingsCenter=createSettingsCenter({icon,glyphs,fail,saveLanguage, mount:{
   writing:mountWritingSettings,shortcuts:mountShortcutSettings,sync:mountWorkspaceSync,attachments:mountAttachmentSettings,
   appearance:mountAppearance
 }});
+
+async function saveLanguage(value) {
+  await platform.preferences.saveLanguage?.(value);
+}
+
+onLocaleChange(() => {
+  commands=localizedCommands();
+  settingsCenter.relocalize();
+  relocalizeEditors();
+  const tab=current();
+  if(tab?.builtin&&!tab.dirty&&!tab.path){
+    tab.saved=tab.text=tab.builtin==="welcome"?welcome():guide();
+    syncEditors();
+  }
+  renderTabs();
+  renderBreadcrumb(tab);
+  stats();
+  renderSide();
+  outline();
+  syncDocumentButtons();
+  renderExternalNotice(tab);
+  if(currentSyncState)syncStatus(currentSyncState);
+  if(!$("#palette").hidden)filterCommands();
+  if(mode==="read")renderRead();
+  platform.preferences.syncNativeLanguage?.(getLocale()).catch(fail);
+});
 
 function mobileKeyboard(key) {
   if(key==='dismiss'){document.activeElement?.blur();return;}
@@ -2558,9 +2780,13 @@ function mobileKeyboard(key) {
     return;
   }
   const pairs={
-    heading:['# ','',''],bold:['**','**','粗体'],todo:['- [ ] ','',''],
-    wiki:['[[',']]','笔记名'],math:['$','$','公式'],code:['\u0060','\u0060','代码'],
-    table:['\n\n| 列 1 | 列 2 |\n| --- | --- |\n|  |  |\n\n','','']
+    heading:['# ','',''],bold:['**','**',tr("main.bold")],todo:['- [ ] ','',''],
+    wiki:['[[',']]',tr("main.noteName")],math:['$','$',tr("main.math")],code:['\u0060','\u0060',tr("main.code")],
+    table:[`
+
+${tr("main.column1Column2")}
+
+`,'','']
   };
   if(mode==='live'){
     if(pairs[key])editorTools.insertTemplate(pairs[key].join(''));
@@ -2586,7 +2812,9 @@ function installContextMenus() {
   const show=(event,id,label,groups)=>{
     if(mobileLayout()){
       event.preventDefault();
-      if(nativeMobile)for(const group of groups)group.items=group.items.filter(item=>!/^在系统资源管理器|^在右侧分栏打开/.test(item.label));
+      if(nativeMobile)for(const group of groups)group.items=group.items.filter(item=>![
+        tr("main.showInFileExplorer2"),tr("main.openInRightSplit")
+      ].includes(item.label));
       return mobileShell.show(label,groups);
     }
     return contextMenu(floatingMenus,event,id,label,groups.filter(group=>group.items.length));
@@ -2598,36 +2826,36 @@ function installContextMenus() {
   $('#side-content').addEventListener('contextmenu',event=>{
     if(pane!=='files')return;
     if(!root){
-      show(event,'file-menu','文件树',[group('工作区',[item('打开工作区文件夹…',()=>action('folder'))])]);
+      show(event,'file-menu',tr("main.fileTree"),[group(tr("main.workspace"),[item(tr("main.openWorkspaceFolder"),()=>action('folder'))])]);
       return;
     }
     const row=event.target.closest('.file-row[data-file],.folder-row[data-folder]');
     const file=row?.dataset.file, folder=row?.dataset.folder;
     const target=file||folder||root;
     const newEntry=(type,label)=>item(label,()=>workspaceUI.menuAction(type,target,!file));
-    const create=group('新建',[newEntry('note',folder?'在此新建笔记':'新建笔记'),
-      newEntry('folder',folder?'在此新建文件夹':'新建文件夹')]);
-    const manage=group('文件管理',[
-      item('在系统资源管理器中显示',()=>reveal(target)),
-      item('重命名',()=>workspaceUI.menuAction('rename',target,!file)),
-      item('移动到文件夹…',()=>workspaceUI.menuAction('move',target,!file)),
-      item(nativeMobile?'移入 Vault 回收站':'移入系统回收站',()=>workspaceUI.menuAction('trash',target,!file),{danger:true})
+    const create=group(tr("main.new"),[newEntry('note',folder?tr("main.newNoteHere"):tr("main.newNote2")),
+      newEntry('folder',folder?tr("main.newFolderHere"):tr("main.newFolder"))]);
+    const manage=group(tr("main.fileManagement"),[
+      item(tr("main.showInFileExplorer2"),()=>reveal(target)),
+      item(tr("documentMenu.rename"),()=>workspaceUI.menuAction('rename',target,!file)),
+      item(tr("documentMenu.moveToFolder"),()=>workspaceUI.menuAction('move',target,!file)),
+      item(nativeMobile?tr("main.moveToVaultTrash"):tr("main.moveToSystemTrash"),()=>workspaceUI.menuAction('trash',target,!file),{danger:true})
     ]);
     if(file) {
-      const title=bookmarkIndex(file)>=0?'取消收藏':'收藏';
-      show(event,'file-menu','笔记文件',[group('笔记',[
-        item('在右侧分栏打开',()=>splitFile(file)),
+      const title=bookmarkIndex(file)>=0?tr("main.removeBookmark"):tr("main.bookmark2");
+      show(event,'file-menu',tr("main.noteFile"),[group(tr("canvasView.note"),[
+        item(tr("main.openInRightSplit"),()=>splitFile(file)),
         item(title,()=>toggleDocumentBookmark(file)),
         pathMenu(type=>copyDocumentPath(type,file)),
-        item('打开导出中心',async()=>{
+        item(tr("main.openExportCenter"),async()=>{
           const tab=findDocumentTab(file)||{path:file,name:base(file),text:(await platform.fs.read(file)).text};
           openExportCenter('pdf',tab,false);
         })
       ]),create,manage]);
     } else if(folder) {
       const collapse=expanded.has(folder);
-      show(event,'file-menu','文件夹',[create,group('文件夹',[
-        item(collapse?'折叠子文件夹':'展开子文件夹',()=>{
+      show(event,'file-menu',tr("main.folder"),[create,group(tr("main.folder"),[
+        item(collapse?tr("main.collapseSubfolders"):tr("main.expandSubfolders"),()=>{
           const stack=[...files];
           while(stack.length) {
             const entry=stack.pop();
@@ -2640,8 +2868,8 @@ function installContextMenus() {
           renderSide();
         })
       ]),manage]);
-    } else show(event,'file-menu','文件树',[create,group('工作区',[
-      item('刷新文件树',()=>action('refresh')),item('在系统资源管理器中打开 Vault',()=>reveal(root,true))
+    } else show(event,'file-menu',tr("main.fileTree"),[create,group(tr("main.workspace"),[
+      item(tr("main.refreshFileTree"),()=>action('refresh')),item(tr("main.openVaultInFileExplorer"),()=>reveal(root,true))
     ])]);
   });
 
@@ -2655,17 +2883,17 @@ function installContextMenus() {
         if(tabs.includes(target))break;
       }
     }
-    show(event,'tab-menu','文档标签页',[group('关闭标签',[
-      item('关闭当前标签',()=>closeTab(tab.id)),
-      item('关闭其他标签',()=>closeTabs(tabs.filter(other=>other!==tab)),disabled(tabs.length>1)),
-      item('关闭右侧标签',()=>closeTabs(right),disabled(right.length))
-    ]),group('文档',[
-      item('在右侧分栏打开',()=>openDocumentSplit(tab)),
-      item('复制双链',()=>copyDocumentPath('wiki',tab.path),disabled(tab.path)),
-      item('在系统资源管理器中显示',()=>reveal(tab.path),disabled(tab.path&&!tab.deleted))
-    ]),group('标签操作',[
-      item(tab.pinned?'取消固定':'固定标签',()=>{tab.pinned=!tab.pinned;renderTabs();session();}),
-      item('重新打开刚关闭的文档',reopenClosed,disabled(closedFiles.length))
+    show(event,'tab-menu',tr("main.noteTabs"),[group(tr("main.closeTab"),[
+      item(tr("main.closeCurrentTab"),()=>closeTab(tab.id)),
+      item(tr("main.closeOtherTabs"),()=>closeTabs(tabs.filter(other=>other!==tab)),disabled(tabs.length>1)),
+      item(tr("main.closeTabsToTheRight"),()=>closeTabs(right),disabled(right.length))
+    ]),group(tr("main.note"),[
+      item(tr("main.openInRightSplit"),()=>openDocumentSplit(tab)),
+      item(tr("documentMenu.copyWikiLink"),()=>copyDocumentPath('wiki',tab.path),disabled(tab.path)),
+      item(tr("main.showInFileExplorer2"),()=>reveal(tab.path),disabled(tab.path&&!tab.deleted))
+    ]),group(tr("main.tabActions"),[
+      item(tab.pinned?tr("main.unpinTab"):tr("main.pinTab"),()=>{tab.pinned=!tab.pinned;renderTabs();session();}),
+      item(tr("main.reopenClosedNote"),reopenClosed,disabled(closedFiles.length))
     ])]);
   });
 
@@ -2673,14 +2901,14 @@ function installContextMenus() {
     const node=event.target.closest('.outline-row')?.querySelector('[data-heading]');
     const index=node?Number(node.dataset.heading):-1, row=headings()[index], file=current()?.path;
     const groups=[];
-    if(row)groups.push(group('标题',[
-      item('跳转到此标题',()=>jumpHeading(index,true)),
-      item(outlineUI.isFolded(index)?'展开此章节':'折叠此章节',()=>outlineUI.toggle(index)),
-      item('复制标题双链',()=>copy(documentWiki(file,row.text)),disabled(file)),
-      item('复制标题文本',()=>copy(row.text))
+    if(row)groups.push(group(tr("main.heading"),[
+      item(tr("main.jumpToHeading"),()=>jumpHeading(index,true)),
+      item(outlineUI.isFolded(index)?tr("main.expandSection"):tr("main.collapseSection"),()=>outlineUI.toggle(index)),
+      item(tr("main.copyHeadingWikiLink"),()=>copy(documentWiki(file,row.text)),disabled(file)),
+      item(tr("main.copyHeadingText"),()=>copy(row.text))
     ]));
-    groups.push(group('大纲',[item('展开全部大纲',()=>outlineUI.foldAll(false)),item('折叠全部大纲',()=>outlineUI.foldAll(true))]));
-    show(event,'outline-menu','大纲',groups);
+    groups.push(group(tr("main.outline"),[item(tr("main.expandAllHeadings"),()=>outlineUI.foldAll(false)),item(tr("main.collapseAllHeadings"),()=>outlineUI.foldAll(true))]));
+    show(event,'outline-menu',tr("main.outline"),groups);
   });
 
   $('.editor-section').addEventListener('contextmenu',event=>{
@@ -2711,18 +2939,18 @@ function installContextMenus() {
       const external=/^https?:\/\//i.test(href);
       const heading=href.startsWith('#');
       if(note||external||heading) {
-        const entries=[item('打开链接',()=>{
+        const entries=[item(tr("main.openLink"),()=>{
           if(external)return platform.window.external(href);
           if(heading&&!wikiLink)return jumpHeading(headings().findIndex(row=>headingMatches(row.text,href.slice(1))));
           return wiki(href,wikiLink,doc);
         })];
-        if(wikiLink)entries.push(item('在右侧分栏打开',async()=>{
+        if(wikiLink)entries.push(item(tr("main.openInRightSplit"),async()=>{
           const target=await platform.index.target({source:doc,destination:href,wiki:true});
-          if(!target)throw Error('找不到链接目标，请先创建这篇笔记。');
+          if(!target)throw Error(tr("main.linkTargetNotFoundCreateTheNote"));
           return splitFile(target.path,target.heading);
         }));
-        entries.push(item('复制链接地址',()=>copy(href)));
-        groups.push(group('链接',entries));
+        entries.push(item(tr("main.copyLinkAddress"),()=>copy(href)));
+        groups.push(group(tr("main.link"),entries));
       }
     }
     if(mode==='read') {
@@ -2730,47 +2958,55 @@ function installContextMenus() {
       const url=image?.getAttribute('src')||'';
       if(url.startsWith('note-image://local/')) {
         const file=decodeURIComponent(url.slice('note-image://local/'.length));
-        groups.push(group('本地图片',[
-          item('在系统资源管理器中显示图片',()=>platform.fs.revealImage(file)),item('复制图片路径',()=>copy(file))
+        groups.push(group(tr("main.localImage"),[
+          item(tr("main.showImageInFileExplorer"),()=>platform.fs.revealImage(file)),item(tr("main.copyImagePath"),()=>copy(file))
         ]));
       }
       if(hasReadingSelection) {
         const text=readingRange.toString();
-        groups.push(group('选区',[item('复制',()=>copy(text))]));
+        groups.push(group(tr("main.selection"),[item(tr("main.copy"),()=>copy(text))]));
       }
     } else if(editable) {
-      groups.push(group('剪贴板',[
-        item('剪切',editable.cut,disabled(editable.selected)),
-        item('复制',()=>copy(editable.text),disabled(editable.selected)),
-        item('粘贴',()=>editable.paste(false)),item('粘贴为纯文本',()=>editable.paste(true)),
-        item('全选',editable.selectAll)
-      ]),group('排版与插入',[
-        {id:'format',label:'格式',items:[
-          ['粗体','**'],['斜体','*'],['行内代码','`','`','代码'],['删除线','~~'],
-          ['行内公式','$','$','x'],['转为双链','[[',']]','笔记名']
+      groups.push(group(tr("main.clipboard"),[
+        item(tr("main.cut"),editable.cut,disabled(editable.selected)),
+        item(tr("main.copy"),()=>copy(editable.text),disabled(editable.selected)),
+        item(tr("main.paste"),()=>editable.paste(false)),item(tr("main.pasteAsPlainText"),()=>editable.paste(true)),
+        item(tr("main.selectAll"),editable.selectAll)
+      ]),group(tr("main.formatInsert"),[
+        {id:'format',label:tr("exportCenter.format"),items:[
+          [tr("main.bold"),'**'],[tr("main.italic"),'*'],[tr("main.inlineCode"),'`','`',tr("main.code")],[tr("main.strikethrough"),'~~'],
+          [tr("main.inlineMath"),'$','$','x'],[tr("main.convertToWikiLink"),'[[',']]',tr("main.noteName")]
         ].map(([label,open,close,placeholder])=>item(label,()=>editable.format(open,close,placeholder)))},
-        {id:'insert',label:'插入',items:[
-          ['表格','\n\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n\n'],
-          ['代码块','\n\n```\n代码\n```\n\n'],['公式块','\n\n$$\nx = 1\n$$\n\n'],
-          ['手动分页符','\n\n<!-- pagebreak -->\n\n']
+        {id:'insert',label:tr("main.insert"),items:[
+          [tr("main.table"),`
+
+${tr("main.column1Column2ContentContent")}
+
+`],
+          [tr("main.codeBlock"),`
+
+${tr("main.code2")}
+
+`],[tr("main.mathBlock"),'\n\n$$\nx = 1\n$$\n\n'],
+          [tr("main.manualPageBreak"),'\n\n<!-- pagebreak -->\n\n']
         ].map(([label,markdown])=>item(label,()=>editable.insert(markdown))).concat(
-          item('笔记模板',()=>{editable.focus();return action('template');})
+          item(tr("main.noteTemplate"),()=>{editable.focus();return action('template');})
         )},
-        ...(editable.tableLine===undefined?[]:[item('格式化当前表格',()=>{
+        ...(editable.tableLine===undefined?[]:[item(tr("documentMenu.formatThisTable"),()=>{
           editable.focus();
           return editMarkdown(text=>formatTables(text,editable.tableLine));
         })])
       ]));
     }
-    if(selection)groups.push(group('分享选区',[
-      item('复制为富文本',()=>copyRichText(selection)),
-      item('导出选中块为长图',()=>saveExport('png',tab,defaultExportPreferences(),selection))
+    if(selection)groups.push(group(tr("main.shareSelection"),[
+      item(tr("main.copyAsRichText"),()=>copyRichText(selection)),
+      item(tr("main.exportSelectionAsLongImage"),()=>saveExport('png',tab,defaultExportPreferences(),selection))
     ]));
-    if(mode==='read')groups.push(group('文档',[
-      item('切换到即时编辑',()=>setMode('live')),item('切换到源码模式',()=>setMode('source')),
-      item('打开导出中心',()=>openExportCenter('pdf',tab)),item('查看版本历史',()=>action('history'),disabled(tab.path))
+    if(mode==='read')groups.push(group(tr("main.note"),[
+      item(tr("main.switchToLive"),()=>setMode('live')),item(tr("main.switchToSource"),()=>setMode('source')),
+      item(tr("main.openExportCenter"),()=>openExportCenter('pdf',tab)),item(tr("main.viewVersionHistory"),()=>action('history'),disabled(tab.path))
     ]));
-    show(event,'editor-menu',mode==='read'?'阅读内容':'编辑文档',groups);
+    show(event,'editor-menu',mode==='read'?tr("main.readContent"):tr("main.editNote"),groups);
   });
   document.addEventListener('contextmenu',event=>{
     if(!event.target.closest('input,textarea,[contenteditable]'))event.preventDefault();
@@ -2782,14 +3018,14 @@ async function toggleVim() {
   const next={...preferences,vim:!preferences.vim};
   await platform.preferences.saveFeatures(next);
   preferences=next;
-  updateVim();
-  toast(preferences.vim?'源码 Vim 已开启':'源码 Vim 已关闭');
+  await updateVim();
+  toast(preferences.vim?tr("main.sourceVimKeysEnabled"):tr("main.sourceVimKeysDisabled"));
 }
 
 function editMarkdown(transform,sourceOnly=false) {
   if(!current())return;
   flushLive();
-  if(sourceOnly&&mode!=='source') {toast('请切换到源码模式，再对当前行运行此命令。');return;}
+  if(sourceOnly&&mode!=='source') {toast(tr("main.switchToSourceBeforeRunningThisCommand"));return;}
   const tab=current(), line=mode==='source'?source.state.doc.lineAt(source.state.selection.main.head):null;
   const text=transform(tab.text,line?line.number-1:undefined);
   if(text===tab.text)return;
@@ -2913,39 +3149,42 @@ document.addEventListener('keydown',event=>{
   event.stopPropagation();
   Promise.resolve(action(command)).catch(fail);
 },true);
-const guide=`# 使用指南\n\n## 编辑与阅读\n\n**即时编辑**支持标题、列表、任务清单、引用、表格、代码块、行内公式和块级公式。输入 / 打开插入菜单，选中文字显示格式工具栏。\n\n**源码模式**使用 CodeMirror，支持语法高亮、撤销重做、括号匹配、查找替换。Ctrl+F 打开查找，面板中的替换按钮可展开替换输入框。\n\n**阅读模式**支持 GFM 表格、KaTeX 数学公式、代码高亮和 Mermaid 图表。即时编辑与阅读模式中的本地图片支持相对路径；在源码或即时编辑模式粘贴、拖放图片时，附件按设置落盘。\n\n## 文件与知识库\n\n打开文件夹后，左侧显示 Markdown 文件树。全文搜索支持工作区内的内容搜索，结果最多 250 条；点击结果会定位源码行。隐藏文件、符号链接、node_modules、dist、release 不参与索引。\n\n使用 [[文档名]]、[[文档名|显示名称]]、[[文档名#标题]] 连接笔记。阅读模式中可点击跳转，右侧显示大纲和反向链接。点击未创建的双链可以创建笔记。Ctrl 悬停预览，即时编辑中 Ctrl 点击打开。\n\n在文件树中右键新建、改名或移入回收站。拖动文件或文件夹可移动，改名和移动会自动更新工作区引用。\n\n## 保存与恢复\n\n- Ctrl+S 保存，新文件会弹出保存位置选择框。\n- 已有文件默认在停止输入约 1 秒后自动保存，可在底栏关闭。\n- 草稿和打开的标签页会保存在应用数据目录，重启后恢复。\n- 每次内容覆盖前保留版本快照，可在版本历史中查看差异。\n- 如果文件被其他程序修改，应用停止覆盖并展示磁盘版本与当前草稿的差异。\n- 退出会保留当前会话和未保存草稿。关闭单个有修改的标签页时会询问是否丢弃。\n\n在 Ctrl+K 命令面板输入“图谱”“Canvas”“属性视图”“今日笔记”或“模板”可打开对应功能。Canvas 保存在工作区根目录的 .canvas 文件；属性视图使用 Markdown 的 YAML 数据。数学和图表在本地渲染，远程图片需要网络。\n\n## 快捷键\n\n| 快捷键 | 功能 |\n| --- | --- |\n| Ctrl+N | 新建 |\n| Ctrl+O | 打开文件 |\n| Ctrl+Shift+O | 打开文件夹 |\n| Ctrl+S | 保存 |\n| Ctrl+Shift+S | 另存为 |\n| Ctrl+K | 文件和命令面板 |\n| Ctrl+F | 文内查找替换 |\n| Ctrl+Shift+F | 工作区全文搜索 |\n| Ctrl+B | 切换侧栏 |\n| Ctrl+W | 关闭当前标签 |\n| F8 | 专注模式 |\n| F11 | 全屏 |\n\n## 图表例子\n\n\`\`\`mermaid\nflowchart LR\n    A[阅读] --> B[思考]\n    B --> C[写作]\n    C --> A\n\`\`\`\n`;
+const guide=()=>`${tr("main.userGuideEditingAndReadingLiveSupports")}
+`;
 async function boot(){
   mobileShell=createMobileShell({native:nativeMobile,icon,glyphs,run:action,tabs:()=>tabs,active:current,mode:()=>mode,
-    workspace:()=>({name:root?base(root):'打开知识库',available:!!root}),
+    workspace:()=>({name:root?base(root):tr("main.openVault"),available:!!root}),
     editMode:mobileEditMode,activate,keyboard:mobileKeyboard,hint:toast,fail,changed(enabled){
       if(appearancePanel.matches(':popover-open'))appearancePanel.hidePopover();
       floatingMenus.close();
       linkCompletion?.close();
       if(initialized){
-        updateVim();
+        updateVim().catch(fail);
         renderSide();
         if(mode==='read')renderRead();
       }
       if(enabled&&initialized&&mode==='live'&&!preferences.mobileLiveEditing)setMode('source').catch(fail);
     }});
+  $('#startup-status').textContent=tr('main.starting');
   const data = await platform.workspace.bootstrap();
+  await platform.preferences.syncNativeLanguage?.(getLocale());
   root = data.root;
   preferences = {...defaults,...(nativeMobile?{webpCompression:true}:{}),...data.config.features};
-  if (data.initialFiles.length) $('#startup-status').textContent = `正在打开 ${base(data.initialFiles[0])}…`;
+  if (data.initialFiles.length) $('#startup-status').textContent = tr("main.opening",{arg1:base(data.initialFiles[0])});
   await mountEditors();
   installFeatures();
   const savedSession=data.config.session;
   const mobileSession=nativeMobile&&savedSession?.mobileRoot!==root?savedSession?.workspaces?.[root]?.mobileSession:undefined;
   const restored = restoreWorkspaceSession(nativeMobile&&savedSession?{...savedSession,...mobileSession,
     tabs:(mobileSession?.tabs??savedSession.tabs??[]).filter(tab=>tab.path?containsPath(root,tab.path,fileKey):
-      (!savedSession.mobileRoot||savedSession.mobileRoot===root||!!mobileSession)&&tab.text!==welcome)
+      (!savedSession.mobileRoot||savedSession.mobileRoot===root||!!mobileSession)&&tab.text!==welcome())
   }:savedSession,nativeMobile);
   if (restored) {
     ({tabs,activeId,mode,autoSave,treeSort,treeDescending,closedFiles,workspaces}=restored);
     document.body.classList.toggle('hide-sidebar',restored.sidebarHidden);
     document.body.classList.toggle('hide-outline',restored.outlineHidden);
   } else if(!nativeMobile) {
-    tabs = [{id:uid(),path:null,name:'开始写作.md',text:welcome,saved:welcome,mtime:null,dirty:false}];
+    tabs = [{id:uid(),path:null,name:tr('main.welcomeName'),builtin:'welcome',text:welcome(),saved:welcome(),mtime:null,dirty:false}];
     activeId = tabs[0].id;
   }
   new MutationObserver(()=>resolveImages($('#live-editor')).catch(console.warn)).observe($('#live-editor'),{childList:true,subtree:true,attributes:true,attributeFilter:['src']});
@@ -2955,6 +3194,9 @@ async function boot(){
   await openExternalFiles(data.initialFiles);
   platform.events.action(a=>action(a).catch(fail));
   platform.events.externalChange(enqueueVaultChange);
+  platform.events.focus(active=>{
+    if(active)externalChanges=externalChanges.catch(fail).then(()=>workspaceSettled).then(()=>checkOpenTabs()).catch(fail);
+  });
   platform.events.sync(syncStatus);
   if(platform.sync.network) {
     const network=()=>platform.sync.network(navigator.onLine).catch(fail);
@@ -2974,8 +3216,8 @@ async function boot(){
   $('#startup-status').hidden = true;
   await openExternalFiles(arriving);
   await installExternalMarkdown();
-  if (root&&restored) updateTabsFromDisk({root,changes:restored.tabs.filter(tab=>tab.path&&containsPath(root,tab.path,fileKey))
-    .map(tab=>({path:tab.path,type:'change'}))}).catch(fail);
+  if(restored)await checkOpenTabs().catch(fail);
+  if(data.config.recovered)toast(tr(data.config.recovered==='quarantined'?'dataSafety.recoverQuarantined':'dataSafety.recovered'));
   session();
 }
 
@@ -3002,7 +3244,7 @@ function loadInitialTree() {
 
 boot().catch(error=>{
   const status = $('#startup-status');
-  status.textContent = `启动失败：${errorMessage(error)}`;
+  status.textContent = tr("main.couldNotStart",{arg1:errorMessage(error)});
   status.hidden = false;
   console.error(error);
 });

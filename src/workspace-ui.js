@@ -1,6 +1,7 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import {showDialog} from './mobile-ui.js';
 
-export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs,getTree,setTree,refresh,openFile,flush,withLocked,toast,fail,settings}) {
+export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs,getTree,setTree,refresh,openFile,flush,withLocked,toast,fail,settings,notifyActivity}) {
   const dialog = document.createElement('dialog');
   dialog.className = 'feature-dialog';
   document.body.append(dialog);
@@ -16,11 +17,11 @@ export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs
     return canonical(child) === canonical(folder) || canonical(child).startsWith(canonical(folder)+'/');
   };
 
-  function ask(title, fields, button='确定', detail='') {
+  function ask(title, fields, button=tr("canvasView.ok"), detail='') {
     if (dialog.open) dialog.close();
     dialog.innerHTML = '<form method="dialog"><h2>'+escape(title)+'</h2>'+
       (detail ? '<p>'+escape(detail)+'</p>' : '')+fields+
-      '<div class="feature-buttons"><button value="cancel" formnovalidate>取消</button><button class="primary" value="ok">'+escape(button)+'</button></div></form>';
+      `<div class="feature-buttons"><button value="cancel" formnovalidate>${tr("workspaceUi.cancel")}</button><button class="primary" value="ok">`+escape(button)+'</button></div></form>';
     dialog.returnValue = '';
     showDialog(dialog);
     return new Promise(resolve => {
@@ -40,7 +41,8 @@ export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs
         const change = changes.get(canonical(tab.path));
         if (change) {
           if (change.path!==tab.path) delete tab.liveState;
-          Object.assign(tab,{path:change.path,name:base(change.path),saved:change.saved,text:change.draft??change.saved,mtime:change.mtime});
+          Object.assign(tab,{path:change.path,name:base(change.path),saved:change.saved,text:change.draft??change.saved,
+            mtime:change.mtime,snapshot:change.snapshot,needsLf:change.needsLf});
           tab.dirty = tab.text !== tab.saved;
         }
       }
@@ -60,11 +62,11 @@ export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs
       setTree(result.tree,edit,result);
       if (edit.type === 'note') await openFile(result.path);
       else await refresh();
-      if (edit.type === 'folder') toast(`已新建文件夹「${base(result.path)}」`);
-      if (edit.type === 'trash') toast(platform.type==='capacitor'?'已移入 Vault 回收站':'已移入系统回收站');
-      if (edit.type === 'rename' || edit.type === 'move') {
+      if (edit.type === 'folder') toast(tr("workspaceUi.createdFolder",{arg1:base(result.path)}));
+      if(result.activity)notifyActivity(result.activity);
+      else if (edit.type === 'rename' || edit.type === 'move') {
         const {notes=0,references=0}=result.refactor||{};
-        toast(references?`已自动更新 ${notes} 篇笔记中的 ${references} 处引用`:'文件位置已更新');
+        toast(references?tr("workspaceUi.updatedLinksInNotes",{arg1:notes,arg2:references}):tr("workspaceUi.fileLocationUpdated"));
       }
     });
   }
@@ -74,23 +76,23 @@ export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs
       const root=getRoot();
       const directories=(rows,prefix='')=>rows.flatMap(row=>row.children?[{path:row.path,label:prefix+row.name},
         ...directories(row.children,prefix+row.name+'/')]:[]);
-      const options=[{path:root,label:'知识库根目录'},...directories(getTree())]
+      const options=[{path:root,label:tr("workspaceUi.vaultRoot")},...directories(getTree())]
         .filter(row=>canonical(row.path)!==canonical(parent(target))&&!descendant(target,row.path));
-      if(!options.length)return toast('没有可移动到的其他文件夹');
-      const form=await ask('移动到文件夹','<label>目标文件夹<select name="parent" required>'+
-        options.map(row=>'<option value="'+escape(row.path)+'">'+escape(row.label)+'</option>').join('')+'</select></label>','移动');
+      if(!options.length)return toast(tr("workspaceUi.noOtherFolderIsAvailable"));
+      const form=await ask(tr("workspaceUi.moveToFolder"),`<label>${tr("workspaceUi.destinationFolder")}<select name="parent" required>`+
+        options.map(row=>'<option value="'+escape(row.path)+'">'+escape(row.label)+'</option>').join('')+'</select></label>',tr("workspaceUi.move"));
       if(form)await apply({type:'move',path:target,parent:form.get('parent')});
       return;
     }
     if (type === 'trash') {
-      const destination=platform.type==='capacitor'?'Vault 回收站':'系统回收站';
-      const form = await ask('移入'+destination,'', '移入回收站','将「'+base(target)+'」移入'+destination+'。打开的未保存修改会保留为草稿。');
+      const destination=tr('activity.trashTitle');
+      const form = await ask(tr("workspaceUi.moveTo")+destination,'', tr("attachments.moveToTrash"),tr("workspaceUi.move2")+base(target)+tr("workspaceUi.to")+destination+tr("workspaceUi.unsavedEditsInOpenNotesWillBe"));
       if (form) await apply({type,path:target});
       return;
     }
-    const title = type === 'rename' ? '重命名' : type === 'note' ? '新建 Markdown 笔记' : '新建文件夹';
+    const title = type === 'rename' ? tr("documentMenu.rename") : type === 'note' ? tr("workspaceUi.newMarkdownNote") : tr("main.newFolder");
     const value = type === 'rename' ? base(target) : '';
-    const form = await ask(title,'<label>名称<input name="name" required value="'+escape(value)+'" autofocus></label>');
+    const form = await ask(title,`<label>${tr("canvasView.name")}<input name="name" required value="`+escape(value)+'" autofocus></label>');
     if (!form) return;
     await apply({type,path:target,parent:folder?target:parent(target),name:String(form.get('name'))});
     return true;
@@ -139,7 +141,7 @@ export function createWorkspaceUI({platform,$,escape,base,active,getRoot,getTabs
 
   async function createMissing(destination,source=active()?.path) {
     const root = getRoot();
-    if (!root) throw Error('请先打开工作区文件夹，再创建链接笔记。');
+    if (!root) throw Error(tr("workspaceUi.openAWorkspaceFolderBeforeCreatingA"));
     const raw = destination.split('#')[0].trim();
     if (!raw) return;
     const explicit = /[\\/]/.test(raw);

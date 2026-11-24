@@ -1,4 +1,5 @@
-const { _electron: electron } = require('playwright');
+const { _electron: electron, chromium } = require('playwright');
+const {memoryFilesystem,registerNativeMock,serveDist,chromiumOptions,assertOutlineSheet}=require('./mobile-smoke.cjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const assert = require('node:assert/strict');
@@ -198,6 +199,13 @@ async function run() {
     assert.equal(await page.locator('.sidebar').evaluate(node=>getComputedStyle(node,'::before').opacity),'0');
     await choose('亮色');
     await screenshot('calcite-settings.png');
+    await chooser.evaluate(node=>node.hidePopover());
+    await page.locator('#settings-toggle').click();
+    await page.locator('#settings-tab-appearance').click();
+    const language=page.locator('#settings-appearance .lg-section .lg-group select[name=language]');
+    await language.waitFor();
+    assert(await language.evaluate(select=>Math.abs(select.offsetWidth-select.parentElement.offsetWidth)<1));
+    await page.locator('.settings-center[open]').evaluate(dialog=>dialog.close());
 
     await page.addInitScript(()=>{
       const watcher = new MutationObserver(()=>{
@@ -231,4 +239,47 @@ async function run() {
   }
 }
 
-run().catch(error=>{console.error(error);process.exitCode=1;});
+async function mobileOutlineAppearance() {
+  const {server,url}=await serveDist();
+  let browser;
+  try{
+    browser=await chromium.launch(chromiumOptions());
+    const context=await browser.newContext({viewport:{width:360,height:780},hasTouch:true,isMobile:true,locale:'en-US'});
+    const text=['# First heading','## Decisions','### Context','#### Design','##### Details',
+      '###### Long sixth-level heading with enough text to wrap within the narrow mobile viewport while keeping the entire title readable',
+      ...Array.from({length:20},(_,index)=>'## More headings '+(index+1))].join('\n\n');
+    const seed={'CalciteVaults/Outline/Outline.md':Buffer.from(text).toString('base64')};
+    const options={useSystemLanguage:true,prefs:{vault:'/CalciteVaults/Outline'}};
+    await context.addInitScript({content:'('+registerNativeMock.toString()+')('+memoryFilesystem.toString()+','+
+      JSON.stringify(seed)+','+JSON.stringify(options)+');'});
+    const page=await context.newPage();
+    await page.goto(url);
+    await page.locator('html[lang=en-US] #app:not([inert])').waitFor();
+    await page.evaluate(()=>document.documentElement.style.setProperty('--safe-bottom','24px'));
+    for(const theme of ['dark','light']){
+      await page.evaluate(theme=>calciteAppearance.set('theme',theme),theme);
+      assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
+      await page.locator('[data-mobile-more]').tap();
+      await page.locator('.mobile-sheet[open]').getByRole('button',{name:'Outline',exact:true}).tap();
+      await assertOutlineSheet(page,{outline:'Outline',backlinks:'Backlinks',filter:'Filter Headings',close:'Close Outline & Backlinks',scrolls:true});
+    }
+    await page.locator('[data-mobile-more]').tap();
+    await page.locator('.mobile-sheet[open]').getByRole('button',{name:'Outline',exact:true}).tap();
+    const handle=page.locator('#mobile-drawers[data-open="right"] .mobile-inspector-handle');
+    await handle.waitFor();
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('#right-sidebar')).transform==='none');
+    const box=await handle.boundingBox();
+    const x=box.x+box.width/2,y=box.y+box.height/2;
+    const session=await context.newCDPSession(page);
+    await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+    await session.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:y+70}]});
+    await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await handle.waitFor({state:'hidden'});
+    console.log('Mobile inspector appearance passed at 360px in English in dark and light themes, including safe area, scrolling and drag dismissal.');
+  }finally{
+    await browser?.close();
+    await new Promise(resolve=>server.close(resolve));
+  }
+}
+
+run().then(mobileOutlineAppearance).catch(error=>{console.error(error);process.exitCode=1;});

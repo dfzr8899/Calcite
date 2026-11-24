@@ -49,13 +49,13 @@ public class CalciteRichClipboard extends Plugin {
                         byte[] buffer = new byte[24 * 1024];
                         for (int count; (count = input.read(buffer)) != -1;) {
                             if (bytes.size() + count > IMAGE_LIMIT) {
-                                call.reject("剪贴板图片超过 32 MiB。");
+                                call.reject(CalciteLanguage.text(getContext(), R.string.clipboard_limit));
                                 return;
                             }
                             bytes.write(buffer, 0, count);
                         }
                         if (bytes.size() == 0) {
-                            call.reject("剪贴板图片为空。");
+                            call.reject(CalciteLanguage.text(getContext(), R.string.clipboard_empty));
                             return;
                         }
                         JSObject result = new JSObject();
@@ -64,7 +64,7 @@ public class CalciteRichClipboard extends Plugin {
                         call.resolve(result);
                     }
                 } catch (Exception error) {
-                    call.reject("无法读取剪贴板图片。", error);
+                    call.reject(CalciteLanguage.text(getContext(), R.string.clipboard_read), error);
                 }
             });
         });
@@ -75,7 +75,7 @@ public class CalciteRichClipboard extends Plugin {
         String html = call.getString("html");
         String text = call.getString("text");
         if (html == null || text == null) {
-            call.reject("缺少剪贴板内容。");
+            call.reject(CalciteLanguage.text(getContext(), R.string.clipboard_missing));
             return;
         }
         getActivity().runOnUiThread(() -> {

@@ -1,5 +1,5 @@
 const {contextBridge,ipcRenderer}=require('electron');
-const names=['bootstrap','folder','recent-vaults','switch-vault','close-vault','tree','open','release-file','read','save','session','search','search-index','external','reveal','discard','pdf','quit','workspace-edit','note-target','backlinks','workspace-notes','workspace-links','workspace-health','features','history','attachment','attachments:scan','attachments:trash','export-document','export-rich','export-markdown','export-image','pandoc-export','workspace-graph','canvas-files','canvas-read','canvas-save'];
+const names=['bootstrap','folder','recent-vaults','switch-vault','close-vault','tree','open','release-file','read','save','session','search','search-index','external','reveal','discard','pdf','quit','workspace-edit','activity:list','activity:undo','activity:empty','note-target','backlinks','workspace-notes','workspace-links','workspace-health','features','history','attachment','attachments:scan','attachments:trash','export-document','export-rich','export-markdown','export-image','pandoc-export','workspace-graph','canvas-files','canvas-read','canvas-save'];
 const subscribe=(channel,callback)=>{
   const listener=(_,payload)=>callback(payload);
   ipcRenderer.on(channel,listener);
@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('desktop',{
   rendererReady: () => ipcRenderer.invoke('renderer-ready'),
   platform: process.platform,
   windowControl: control => ipcRenderer.invoke('window-control', control),
+  setLanguage: language => ipcRenderer.invoke('window:language',language),
   setWindowAppearance: settings => ipcRenderer.invoke('window:set-appearance',settings),
   onWindowFocus: callback => subscribe('window-focus-state',callback),
   onWindowState: callback => subscribe('window-state',callback)

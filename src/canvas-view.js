@@ -1,17 +1,18 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import {randomId} from './random-id.js';
 
 export function createCanvasView({platform,dialog,ask,escape,root,files,relative,open,toast,fail}) {
   return async function showCanvas() {
     const workspace=root();
-    if(!workspace)throw Error('请先打开工作区。');
+    if(!workspace)throw Error(tr("gitSync.openAWorkspaceFirst"));
     const names=await platform.workspace.listCanvases();
     if(root()!==workspace)return;
-    const panel=dialog('Canvas 画布',
-      '<div class="workspace-view-tools"><label>画布 <select name="board"><option value="">新画布</option>'+
+    const panel=dialog(tr("canvasView.canvas"),
+      `<div class="workspace-view-tools"><label>${tr("canvasView.canvas2")} <select name="board"><option value="">${tr("canvasView.newCanvas")}</option>`+
       names.map(name=>'<option value="'+escape(name)+'">'+escape(name)+'</option>').join('')+'</select></label>'+
-      '<button data-canvas-action="save">保存</button><button data-canvas-action="text">文字卡片</button>'+
-      '<button data-canvas-action="file">笔记卡片</button><button data-canvas-action="edit">编辑卡片</button>'+
-      '<button data-canvas-action="connect">连接卡片</button><button data-canvas-action="delete">删除卡片</button>'+
+      `<button data-canvas-action="save">${tr("main.save")}</button><button data-canvas-action="text">${tr("canvasView.textCard")}</button>`+
+      `<button data-canvas-action="file">${tr("canvasView.noteCard")}</button><button data-canvas-action="edit">${tr("canvasView.editCard")}</button>`+
+      `<button data-canvas-action="connect">${tr("canvasView.connectCards")}</button><button data-canvas-action="delete">${tr("canvasView.deleteCard")}</button>`+
       '<span class="canvas-status" role="status"></span></div>'+
       '<div class="canvas-scroll"><div class="canvas-space"><canvas aria-hidden="true"></canvas></div></div>');
     const boardSelect=panel.querySelector('[name=board]');
@@ -30,15 +31,15 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
     const guard=callback=>async (...args)=>{
       if(busy)return;
       busy=true;
-      try { if(root()!==workspace)throw Error('工作区已切换，请重新打开画布。');await callback(...args); }
+      try { if(root()!==workspace)throw Error(tr("canvasView.theWorkspaceChangedReopenTheCanvas"));await callback(...args); }
       catch(error){fail(error);}
       finally{busy=false;}
     };
-    function mark(){dirty=true;status.textContent='有未保存的修改';}
+    function mark(){dirty=true;status.textContent=tr("canvasView.unsavedChanges");}
     async function save(){
       let filename=name;
       if(!name){
-        const form=await ask('保存画布','<label>名称<input name="name" required autofocus></label>','保存');
+        const form=await ask(tr("canvasView.saveCanvas"),`<label>${tr("canvasView.name")}<input name="name" required autofocus></label>`,tr("main.save"));
         if(!form)return false;
         filename=String(form.get('name')).trim();
       }
@@ -46,13 +47,13 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
       name=result.name;version=result.version;dirty=false;
       if(![...boardSelect.options].some(option=>option.value===name))boardSelect.add(new Option(name,name));
       boardSelect.value=name;
-      status.textContent='已保存';
+      status.textContent=tr("canvasView.saved");
       return true;
     }
     async function allowChange(){
       if(!dirty)return true;
-      const form=await ask('画布有未保存的修改',
-        '<label>处理方式<select name="action"><option value="save">保存画布</option><option value="discard">丢弃修改</option></select></label>','继续');
+      const form=await ask(tr("canvasView.theCanvasHasUnsavedChanges"),
+        `<label>${tr("canvasView.action")}<select name="action"><option value="save">${tr("canvasView.saveCanvas")}</option><option value="discard">${tr("main.discardChanges")}</option></select></label>`,tr("canvasView.continue"));
       if(!form)return false;
       return form.get('action')==='discard'||await save();
     }
@@ -106,14 +107,14 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
         element.classList.toggle('canvas-group',node.type==='group');
         element.dataset.card=node.id;
         const title=document.createElement('strong');
-        title.textContent=node.type==='file'?String(node.file||'笔记'):node.type==='group'?String(node.label||'分组'):node.type==='link'?'网页':'文字卡片';
+        title.textContent=node.type==='file'?String(node.file||tr("canvasView.note")):node.type==='group'?String(node.label||tr("canvasView.group")):node.type==='link'?tr("canvasView.webPage"):tr("canvasView.textCard");
         const body=document.createElement('span');
         body.textContent=String(node.text||node.url||node.subpath||'');
         element.append(title,body);
         position(element,node);
         area.append(element);
       }
-      connection.textContent=from?'选择连接终点':'连接卡片';
+      connection.textContent=from?tr("canvasView.selectAConnectionTarget"):tr("canvasView.connectCards");
       drawEdges();
     }
     boardSelect.addEventListener('change',guard(async()=>{
@@ -125,7 +126,7 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
         const result=await platform.workspace.readCanvas(next);
         loaded=JSON.parse(result.text);
         if(!Array.isArray(loaded.nodes)||!Array.isArray(loaded.edges)||loaded.nodes.length>1200||
-          loaded.nodes.some(node=>!node||typeof node.id!=='string')||loaded.edges.some(edge=>!edge||typeof edge.id!=='string')) throw Error('画布格式不正确或卡片过多。');
+          loaded.nodes.some(node=>!node||typeof node.id!=='string')||loaded.edges.some(edge=>!edge||typeof edge.id!=='string')) throw Error(tr("canvasView.invalidCanvasOrTooManyCards"));
         nextVersion=result.version;
       }
       board=loaded;name=next;version=nextVersion;dirty=false;selected=from=undefined;
@@ -134,13 +135,13 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
     async function editCard(node){
       if(node.type==='file'){
         const options=files().map(file=>'<option value="'+escape(relative(file.path))+'" '+(relative(file.path)===node.file?'selected':'')+'>'+escape(relative(file.path))+'</option>');
-        if(!options.length)throw Error('工作区中还没有 Markdown 笔记。');
-        const form=await ask('笔记卡片','<label>笔记<select name="file" required>'+options.join('')+'</select></label>','确定');
+        if(!options.length)throw Error(tr("canvasView.thisWorkspaceHasNoMarkdownNotesYet"));
+        const form=await ask(tr("canvasView.noteCard"),`<label>${tr("canvasView.note")}<select name="file" required>`+options.join('')+'</select></label>',tr("canvasView.ok"));
         if(!form)return false;
         node.file=String(form.get('file'));
       } else {
         const field=node.type==='group'?'label':node.type==='link'?'url':'text';
-        const form=await ask('编辑卡片','<label>内容<textarea rows="6" name="value" autofocus>'+escape(node[field]||'')+'</textarea></label>','确定');
+        const form=await ask(tr("canvasView.editCard"),`<label>${tr("canvasView.content")}<textarea rows="6" name="value" autofocus>`+escape(node[field]||'')+'</textarea></label>',tr("canvasView.ok"));
         if(!form)return false;
         node[field]=String(form.get('value'));
       }
@@ -158,7 +159,7 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
         board.nodes.push(node);selected=node.id;
       } else {
         const node=nodeFor(selected);
-        if(!node){toast('请先选择一张卡片');return;}
+        if(!node){toast(tr("canvasView.selectACardFirst"));return;}
         if(action==='edit'&&!await editCard(node))return;
         if(action==='connect'){from=from?undefined:selected;paint();return;}
         if(action==='delete'){
@@ -179,15 +180,16 @@ export function createCanvasView({platform,dialog,ask,escape,root,files,relative
         from=undefined;mark();
       }
       area.querySelectorAll('[data-card]').forEach(node=>node.classList.toggle('selected',node.dataset.card===selected));
-      connection.textContent=from?'选择连接终点':'连接卡片';
+      connection.textContent=from?tr("canvasView.selectAConnectionTarget"):tr("canvasView.connectCards");
       drawEdges();
     });
     area.addEventListener('dblclick',guard(async event=>{
       const node=nodeFor(event.target.closest('[data-card]')?.dataset.card);
       if(!node)return;
       if(node.type==='file'){
-        const file=files().find(file=>relative(file.path)===node.file);
-        if(!file)throw Error('找不到画布中的笔记。');
+        const matchKey=value=>platform.os==='win32'?String(value||'').replaceAll('\\','/').toLowerCase():String(value||'').replaceAll('\\','/');
+        const file=files().find(file=>matchKey(relative(file.path))===matchKey(node.file));
+        if(!file)throw Error(tr("canvasView.theNoteOnThisCanvasCouldNot"));
         if(await allowChange()){panel.close();await open(file.path);}
       } else if(await editCard(node)){mark();paint();}
     }));

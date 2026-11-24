@@ -16,6 +16,7 @@ import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 @CapacitorPlugin(name = "CalciteSecureStorage")
 public class CalciteSecureStorage extends Plugin {
@@ -58,7 +59,7 @@ public class CalciteSecureStorage extends Plugin {
             cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, Base64.decode(fields[0], Base64.NO_WRAP)));
             cipher.updateAAD(name.getBytes(StandardCharsets.UTF_8));
             call.resolve(new JSObject().put("value", new String(cipher.doFinal(Base64.decode(fields[1], Base64.NO_WRAP)), StandardCharsets.UTF_8)));
-        } catch (Exception ignored) { call.reject("系统密钥不可用。"); }
+        } catch (Exception ignored) { call.reject(CalciteLanguage.text(getContext(), R.string.secure_unavailable)); }
     }
 
     @PluginMethod public void set(PluginCall call) {
@@ -77,6 +78,25 @@ public class CalciteSecureStorage extends Plugin {
             }
             if (!edit.commit()) throw new IllegalStateException();
             call.resolve();
-        } catch (Exception ignored) { call.reject("无法保存系统密钥。"); }
+        } catch (Exception ignored) { call.reject(CalciteLanguage.text(getContext(), R.string.secure_save_failed)); }
+    }
+
+    @PluginMethod public void decryptPair(PluginCall call) {
+        try {
+            String encodedKey = call.getString("key");
+            String encodedIv = call.getString("iv");
+            String encodedData = call.getString("data");
+            if (encodedKey == null || encodedIv == null || encodedData == null || encodedData.length() > 16000) {
+                throw new IllegalArgumentException();
+            }
+            byte[] rawKey = Base64.decode(encodedKey, Base64.DEFAULT);
+            byte[] iv = Base64.decode(encodedIv, Base64.DEFAULT);
+            byte[] data = Base64.decode(encodedData, Base64.DEFAULT);
+            if (rawKey.length != 32 || iv.length != 12 || data.length < 16) throw new IllegalArgumentException();
+            Cipher cipher = Cipher.getInstance(FORMAT);
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(rawKey, "AES"), new GCMParameterSpec(128, iv));
+            String plaintext = new String(cipher.doFinal(data), StandardCharsets.UTF_8);
+            call.resolve(new JSObject().put("value", plaintext));
+        } catch (Exception ignored) { call.reject(CalciteLanguage.text(getContext(), R.string.secure_unavailable)); }
     }
 }

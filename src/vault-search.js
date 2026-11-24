@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import SearchWorker from './search-worker.js?worker&inline';
 
 export function createVaultSearch(snapshot) {
@@ -20,7 +21,7 @@ export function createVaultSearch(snapshot) {
     worker??=new SearchWorker();
     return new Promise(resolve=>{
       const running=worker;
-      const timer=setTimeout(()=>finish({error:'搜索用时过长，请缩小范围或简化正则。'},true),5000);
+      const timer=setTimeout(()=>finish({error:tr("vaultSearch.searchTimedOutNarrowTheSearchOr")},true),5000);
       function finish(result,restart=false) {
         clearTimeout(timer);
         pending=undefined;
@@ -33,7 +34,7 @@ export function createVaultSearch(snapshot) {
       }
       pending=finish;
       running.onmessage=event=>finish(event.data);
-      running.onerror=()=>finish({error:'无法完成搜索。'},true);
+      running.onerror=()=>finish({error:tr("vaultSearch.couldNotCompleteTheSearch")},true);
       running.postMessage({...options,update});
     });
   }

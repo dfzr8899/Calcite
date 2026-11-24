@@ -1,3 +1,4 @@
+import {t as tr} from "./i18n/index.mjs";
 import { load, dump, JSON_SCHEMA } from 'js-yaml';
 export const splitFrontmatter = text => {
   const match = text.match(/^(\uFEFF?---[ \t]*\r?\n([\s\S]*?)^(?:---|\.\.\.)[ \t]*(?:\r?\n|$))/m);
@@ -38,7 +39,7 @@ export function writeProperties(text, data) {
   const wrap = content => bom + '---' + newline + content + '---' + newline + value;
   if (!prefix) return Object.keys(data).length ? wrap(serialize(data)) : text;
   const before=properties(yaml);
-  if (!before) throw Error('请先在源码中修复无效的 YAML 属性。');
+  if (!before) throw Error(tr("noteMetadata.fixTheInvalidYamlPropertiesInSource"));
   const keys = new Set([...Object.keys(before),...Object.keys(data)]);
   const equal = (a,b) => JSON.stringify(a)===JSON.stringify(b);
   const changed = [...keys].filter(key=>!equal(before[key],data[key])||Object.hasOwn(before,key)!==Object.hasOwn(data,key));
@@ -49,7 +50,7 @@ export function writeProperties(text, data) {
   for (const key of changed) {
     const index = starts.findIndex(row=>row.key===key);
     if (index<0 && Object.hasOwn(before,key)) {
-      throw Error('该属性使用了复杂 YAML，请在源码中修改。');
+      throw Error(tr("noteMetadata.thisPropertyUsesComplexYamlEditIt"));
     }
     const start = index<0?yaml.length:starts[index].start;
     const end = index<0?yaml.length:starts[index+1]?.start??yaml.length;
@@ -62,7 +63,7 @@ export function writeProperties(text, data) {
     nextYaml=nextYaml.slice(0,patch.start)+patch.value+nextYaml.slice(patch.end);
   const parsed=properties(nextYaml);
   if (!parsed || [...keys].some(key=>Object.hasOwn(parsed,key)!==Object.hasOwn(data,key)||!equal(parsed[key],data[key]))) {
-    throw Error('修改会影响其他 YAML 属性，请在源码中处理。');
+    throw Error(tr("noteMetadata.thisChangeAffectsOtherYamlPropertiesEdit"));
   }
   return nextYaml.trim() ? wrap(nextYaml) : bom + value;
 }

@@ -14,12 +14,25 @@ import org.w3c.dom.Element;
 
 public class ExternalMarkdownTest {
     @Test
+    public void preservesColdAndWarmDeliveriesUntilConsumed() {
+        var inbox = new PendingExternalFiles<String>(2);
+        assertTrue(inbox.offer("cold.md"));
+        assertTrue(inbox.offer("warm.markdown"));
+        assertFalse(inbox.offer("over-capacity.md"));
+        assertEquals("cold.md", inbox.poll());
+        assertTrue(inbox.offer("later.MD"));
+        assertEquals("warm.markdown", inbox.poll());
+        assertEquals("later.MD", inbox.poll());
+        assertNull(inbox.poll());
+    }
+
+    @Test
     public void cleansNamesWithoutLosingDotsOrExtensions() {
         assertEquals("v1.0.notes.md", ExternalMarkdown.cleanName("../private/v1.0.notes.md"));
         assertEquals("笔记_.MD", ExternalMarkdown.cleanName("C:\\Downloads\\..笔记?.MD"));
         assertEquals("_CON.markdown", ExternalMarkdown.cleanName("CON.markdown"));
-        assertEquals("未命名文档.md", ExternalMarkdown.cleanName("folder/.."));
-        assertEquals("未命名文档.md", ExternalMarkdown.cleanName(null));
+        assertEquals("Untitled Document.md", ExternalMarkdown.cleanName("folder/.."));
+        assertEquals("未命名文档.md", ExternalMarkdown.cleanName(null, "未命名文档.md"));
         String longName = ExternalMarkdown.cleanName("笔".repeat(130) + ".markdown");
         assertEquals(100, longName.length());
         assertTrue(longName.endsWith(".markdown"));
@@ -28,14 +41,14 @@ public class ExternalMarkdownTest {
     @Test
     public void readsUtf8WithBomAndRejectsEmptyOrBinaryText() throws Exception {
         assertEquals("# 标题\r\n正文", read("\uFEFF# 标题\r\n正文".getBytes(StandardCharsets.UTF_8)));
-        assertRejected(" \r\n\t".getBytes(StandardCharsets.UTF_8), "为空");
-        assertRejected(new byte[] { '#', ' ', 0, 1 }, "二进制");
-        assertRejected(new byte[] { (byte) 0xff, (byte) 0xfe }, "UTF-8");
+        assertRejected(" \r\n\t".getBytes(StandardCharsets.UTF_8), R.string.external_empty);
+        assertRejected(new byte[] { '#', ' ', 0, 1 }, R.string.external_binary);
+        assertRejected(new byte[] { (byte) 0xff, (byte) 0xfe }, R.string.external_utf8);
     }
 
     @Test
     public void appliesSizeLimitEvenWithoutContentLength() throws Exception {
-        assertRejected(new byte[ExternalMarkdown.MAX_BYTES + 1], "10 MiB");
+        assertRejected(new byte[ExternalMarkdown.MAX_BYTES + 1], R.string.external_limit);
         assertThrows(ExternalMarkdown.InvalidDocument.class, () -> ExternalMarkdown.readText((InputStream) null));
     }
 
@@ -72,7 +85,7 @@ public class ExternalMarkdownTest {
                     suffixView |= suffix && mime.contains("*/*");
                     untypedView |= suffix && mime.isEmpty();
                 }
-                genericContent |= schemes.equals(Set.of("content")) && mime.equals(Set.of("application/octet-stream"));
+                genericContent |= schemes.equals(Set.of("content", "file")) && mime.equals(Set.of("application/octet-stream"));
             }
             if (actions.contains("android.intent.action.SEND")) {
                 assertTrue(categories.contains("android.intent.category.DEFAULT"));
@@ -96,7 +109,7 @@ public class ExternalMarkdownTest {
         return ExternalMarkdown.readText(new ByteArrayInputStream(bytes));
     }
 
-    private static void assertRejected(byte[] bytes, String reason) {
-        assertTrue(assertThrows(ExternalMarkdown.InvalidDocument.class, () -> read(bytes)).getMessage().contains(reason));
+    private static void assertRejected(byte[] bytes, int reason) {
+        assertEquals(reason, assertThrows(ExternalMarkdown.InvalidDocument.class, () -> read(bytes)).messageId);
     }
 }

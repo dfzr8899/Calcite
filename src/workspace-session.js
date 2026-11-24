@@ -1,7 +1,7 @@
 import {normalizeLineEndings} from '../shared/text-files.mjs';
 
-export const tabSnapshot=({id,path,name,text,saved,mtime,pinned,viewMode,scrollByMode,deleted,holdAutoSave})=>
-  ({id,path,name,text,saved,mtime,pinned,viewMode,scrollByMode,deleted,holdAutoSave});
+export const tabSnapshot=({id,path,name,text,saved,mtime,snapshot,pinned,viewMode,scrollByMode,deleted,holdAutoSave})=>
+  ({id,path,name,text,saved,mtime,snapshot,pinned,viewMode,scrollByMode,deleted,holdAutoSave});
 
 export function restoreWorkspaceSession(session,allowEmpty=false) {
   if (!Array.isArray(session?.tabs)||!allowEmpty&&!session.tabs.length) return null;

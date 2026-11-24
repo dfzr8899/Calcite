@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 export async function compressPastedImage(file,{webpCompression,webpWidth=1920,webpQuality=.82}) {
   const type=file.type;
   if(!webpCompression||!/^image\/(?:png|jpeg|bmp)$/i.test(type))return file;
@@ -30,10 +31,10 @@ import {errorMessage} from './error-message.js';
 
 const bytes=value=>value>=1024*1024?(value/(1024*1024)).toFixed(1)+' MiB':Math.ceil(value/1024)+' KiB';
 export function mountAttachments(panel,{mobile,icon,glyphs,scan,trash,confirm,escape,fail}) {
-  const statusLine='<p role="status">正在扫描工作区图片…</p><div class="attachment-list"></div>';
-  const select='<button type="button" data-select>全选</button>';
-  const rescan='<button type="button" data-refresh>重新扫描</button>';
-  const remove='<button type="button" data-trash disabled>移入回收站</button>';
+  const statusLine=`<p role="status">${tr("attachments.scanningWorkspaceImages")}</p><div class="attachment-list"></div>`;
+  const select=`<button type="button" data-select>${tr("main.selectAll")}</button>`;
+  const rescan=`<button type="button" data-refresh>${tr("attachments.scanAgain")}</button>`;
+  const remove=`<button type="button" data-trash disabled>${tr("attachments.moveToTrash")}</button>`;
   panel.innerHTML=mobile?'<div class="lg-attachments"><div class="lg-settings-scroll">'+statusLine+'</div>'+
     '<div class="lg-footer"><div class="feature-buttons">'+rescan+select+remove+'</div></div></div>':
     statusLine+'<div class="feature-buttons">'+select+rescan+remove+'</div>';
@@ -49,16 +50,16 @@ export function mountAttachments(panel,{mobile,icon,glyphs,scan,trash,confirm,es
     }
   }
   async function refresh() {
-    busy=true;update();status.classList.remove('lg-visually-hidden');status.textContent='正在扫描工作区图片…';
+    busy=true;update();status.classList.remove('lg-visually-hidden');status.textContent=tr("attachments.scanningWorkspaceImages");
     try {
       rows=await scan();
-      status.textContent=rows.length?`${rows.length} 张孤立图片，可释放 ${bytes(rows.reduce((sum,row)=>sum+row.size,0))}。`:'没有发现孤立图片。';
+      status.textContent=rows.length?tr("attachments.unusedImagesCanBeFreed",{arg1:rows.length,arg2:bytes(rows.reduce((sum,row)=>sum+row.size,0))}):tr("attachments.noUnusedImagesFound");
       status.classList.toggle('lg-visually-hidden',mobile&&!rows.length);
       list.innerHTML=mobile&&!rows.length?
-        '<div class="lg-empty">'+icon('images')+'<strong>没有孤立附件</strong><p>工作区中的图片都在使用中。</p></div>':
+        '<div class="lg-empty">'+icon('images')+`<strong>${tr("attachments.noUnusedAttachments")}</strong><p>${tr("attachments.allImagesInTheWorkspaceAreIn")}</p></div>`:
         rows.map((row,index)=>'<label class="attachment-row">'+
         '<img loading="lazy" alt="" src="'+escape(row.preview)+'"><span>'+escape(row.relative)+'<small>'+escape(bytes(row.size)+' · '+new Date(row.mtime).toLocaleString('zh-CN'))+'</small></span>'+
-        '<input class="lg-switch" role="switch" type="checkbox" aria-label="选择附件 '+escape(row.relative)+'" value="'+index+'"></label>').join('');
+        `<input class="lg-switch" role="switch" type="checkbox" aria-label="${tr("attachments.selectAttachments")} `+escape(row.relative)+'" value="'+index+'"></label>').join('');
       if(mobile)glyphs();
     }catch(error){rows=[];list.replaceChildren();status.classList.remove('lg-visually-hidden');status.textContent=errorMessage(error);}
     finally{busy=false;update();}

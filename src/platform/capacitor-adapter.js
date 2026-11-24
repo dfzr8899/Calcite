@@ -1,3 +1,4 @@
+import {t as tr,getLocale} from "../../shared/i18n/index.mjs";
 import {Capacitor,registerPlugin} from '@capacitor/core';
 import {Filesystem,Directory} from '@capacitor/filesystem';
 import {Preferences} from '@capacitor/preferences';
@@ -5,6 +6,7 @@ import {Clipboard} from '@capacitor/clipboard';
 import {Network} from '@capacitor/network';
 import {App} from '@capacitor/app';
 import {Share} from '@capacitor/share';
+import {sha256} from '../../shared/core/sha.mjs';
 import {randomId} from '../random-id.js';
 import {createCapacitorGitFs,basename,dirname,fromBase64,posixPath,vaultStoragePath} from './capacitor-git-fs.js';
 import {createCapacitorIndex,indexEntry,markdown,within} from './capacitor-index.js';
@@ -12,19 +14,26 @@ import {createLocalGit} from './capacitor-local-git.js';
 import {createMobileExport,imageData,imageMime} from './capacitor-export.js';
 import {markdownImages,localReference} from '../../shared/markdown-images.mjs';
 import {normalizeLineEndings} from '../../shared/text-files.mjs';
-import {planLinkRefactor} from '../../shared/core/link-refactor.mjs';
+import {planLinkRefactor,planCanvasLinkRefactor} from '../../shared/core/link-refactor.mjs';
+import {createActivityLog} from '../../shared/core/activity-log.mjs';
+import {guardedSave} from '../../shared/core/guarded-save.mjs';
+
+const decoder=new TextDecoder('utf-8',{ignoreBOM:true});
+const strictDecoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
 
 const base='/CalciteVaults';
+const sessionFile=posixPath(base,'.calcite-session.json');
 const extension= /\.(?:md|markdown|mdown|canvas)$/i;
-const welcome='# 欢迎使用 Calcite\n\n- 点左上角打开抽屉。点顶部的知识库名称可切换或管理知识库，点底部的「新建笔记」即可开始写作。\n- 点右上角的「编辑」或「阅读」切换模式。在「…」中打开大纲和反向链接。\n- 要同步到电脑，先在电脑上生成配对串或二维码，再在手机的知识库管理中选择「配对新建」。配对后，点顶栏的同步状态，再点「立即同步」。\n';
-const unavailable=async()=>{throw Error('此功能在 Calcite 桌面版可用。');};
+const welcome=()=>`${tr("capacitorAdapter.welcomeToCalciteOpenTheDrawerFrom")}
+`;
+const unavailable=async()=>{throw Error(tr("capacitorAdapter.thisFeatureIsAvailableInCalciteOn"));};
 const noop=()=>{};
 const empty=async()=>[];
 const visible=name=>!name.startsWith('.')&&!['node_modules','dist','release'].includes(name);
 const noteName=(name,ext='.md')=>extension.test(name)?name:name+ext;
 const validName=name=>{
   const value=String(name||'').trim();
-  if(!value||value.length>100||/^[.]|[. ]$|[\\/:*?"<>|\x00-\x1f]/.test(value))throw Error('请输入有效的文件或文件夹名称。');
+  if(!value||value.length>100||/^[.]|[. ]$|[\\/:*?"<>|\x00-\x1f]/.test(value))throw Error(tr("capacitorAdapter.enterAValidFileOrFolderName"));
   return value;
 };
 const encodeRelative=path=>path.split('/').map(part=>encodeURIComponent(part).replaceAll('(','%28').replaceAll(')','%29')).join('/');
@@ -40,6 +49,8 @@ const RichClipboard=registerPlugin('CalciteRichClipboard');
 const DocumentCapture=registerPlugin('CalciteDocumentCapture');
 const DocumentPrint=registerPlugin('CalciteDocumentPrint');
 const ExternalFiles=registerPlugin('CalciteExternalFiles');
+const AtomicFiles=registerPlugin('CalciteAtomicFiles');
+const SystemBars=registerPlugin('CalciteSystemBars');
 
 export function capacitorAdapter() {
   const android=Capacitor.getPlatform()==='android';
@@ -53,12 +64,34 @@ export function capacitorAdapter() {
   let root='',queue=Promise.resolve(),generation=0,revision=0,storageWarning='';
   const images=new Map();
   const uriCache=new Map(),imagePaths=new Map();
-  const replacements=new Map();
   const readSetting=async key=>{
     const {value}=await Preferences.get({key});
     try {return value&&JSON.parse(value);}catch{return undefined;}
   };
   const saveSetting=(key,value)=>Preferences.set({key,value:JSON.stringify(value)});
+  let sessionQueue=Promise.resolve();
+  function compactSession(value) {
+    if(!value||typeof value!=='object')return value;
+    const stripTabs=tabs=>Array.isArray(tabs)?tabs.map(({text,saved,...meta})=>meta):tabs;
+    const workspaces=value.workspaces&&typeof value.workspaces==='object'
+      ?Object.fromEntries(Object.entries(value.workspaces).map(([dir,ws])=>{
+        if(!ws||typeof ws!=='object')return [dir,ws];
+        const {mobileSession,...rest}=ws;
+        if(!mobileSession||typeof mobileSession!=='object')return [dir,rest];
+        return [dir,{...rest,mobileSession:{...mobileSession,tabs:stripTabs(mobileSession.tabs)}}];
+      }))
+      :value.workspaces;
+    return {...value,tabs:stripTabs(value.tabs),workspaces};
+  }
+  function saveSession(value) {
+    const next=sessionQueue.then(async()=>{
+      await io.mkdir(base,{recursive:true});
+      await atomicWrite(sessionFile,JSON.stringify(value));
+      await saveSetting('session',compactSession(value));
+    });
+    sessionQueue=next.catch(()=>{});
+    return next;
+  }
   function serialize(task) {
     const next=queue.then(task);
     queue=next.catch(()=>{});
@@ -93,7 +126,7 @@ export function capacitorAdapter() {
   function scoped(path,allowRoot=false) {
     const file=posixPath(path);
     if(!root||!within(root,file)||(!allowRoot&&root===file)||file.slice(root.length+1).split('/').some(part=>part.startsWith('.')))
-      throw Error('路径不在当前 Vault 内。');
+      throw Error(tr("capacitorAdapter.thePathIsOutsideTheCurrentVault"));
     return file;
   }
   async function listDirectory(dir,recover){
@@ -105,8 +138,9 @@ export function capacitorAdapter() {
       else await io.rename(backup,target);
     }
     if(backups.length)entries=await io.readdir(dir,{withFileTypes:true});
+    const locale=getLocale();
     return entries.filter(entry=>visible(entry.name))
-      .sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name,'zh-CN',{numeric:true}));
+      .sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory())||a.name.localeCompare(b.name,locale,{numeric:true}));
   }
   async function all(dir,recover=false) {
     const result=[],pending=[{path:dir,children:result,depth:0}];
@@ -118,7 +152,7 @@ export function capacitorAdapter() {
         const path=posixPath(parent.path,entry.name);
         const row={...entry,path};
         if(entry.isDirectory()){
-          if(parent.depth===32)throw Error('Vault 目录层级超过 32 层。');
+          if(parent.depth===32)throw Error(tr("capacitorAdapter.theVaultPathIsMoreThan32"));
           row.children=[];
           pending.push({path,children:row.children,depth:parent.depth+1});
         }
@@ -152,8 +186,16 @@ export function capacitorAdapter() {
   }
   async function mount(dir,retained=[],legacyKey) {
     if(dir===root)return {root,tree:await tree(),retained,initialFiles:[]};
+    let recovered=false;
     if(dir){
-      if(dirname(dir)!==base||!(await io.stat(dir)).isDirectory())throw Error('找不到此 Vault。');
+      if(dirname(dir)!==base||!(await io.stat(dir)).isDirectory())throw Error(tr("capacitorAdapter.thisVaultCouldNotBeFound"));
+      let quarantined=false;
+      const didRecover=await activity(dir,(error,failedPath)=>{
+        quarantined=true;
+        console.warn('Quarantined unrecoverable refactor journal:',failedPath,error);
+      }).recover();
+      recovered=quarantined?'quarantined':didRecover;
+      if(didRecover)console.info(tr('dataSafety.recovered'),dir);
       await saveSetting('vault',dir);
     }
     root=dir;
@@ -164,16 +206,17 @@ export function capacitorAdapter() {
     images.clear();uriCache.clear();imagePaths.clear();
     const rows=await tree(true);
     localGit.mount(dir,legacyKey);
-    return {root,tree:rows,retained:retained.filter(path=>dir&&within(dir,path)),initialFiles:flat(rows).filter(row=>markdown.test(row.path)).slice(0,1).map(row=>row.path)};
+    return {root,recovered,tree:rows,retained:retained.filter(path=>dir&&within(dir,path)),initialFiles:flat(rows).filter(row=>markdown.test(row.path)).slice(0,1).map(row=>row.path)};
   }
   async function vaults() {
     await io.mkdir(base,{recursive:true});
+    const locale=getLocale();
     return (await io.readdir(base,{withFileTypes:true})).filter(item=>item.isDirectory()&&visible(item.name))
-      .map(item=>({path:posixPath(base,item.name),name:item.name})).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN'));
+      .map(item=>({path:posixPath(base,item.name),name:item.name})).sort((a,b)=>a.name.localeCompare(b.name,locale));
   }
   async function vaultPath(path) {
     const dir=posixPath(path);
-    if(dirname(dir)!==base||!visible(basename(dir))||!(await io.stat(dir)).isDirectory())throw Error('找不到此知识库。');
+    if(dirname(dir)!==base||!visible(basename(dir))||!(await io.stat(dir)).isDirectory())throw Error(tr("capacitorAdapter.thisVaultCouldNotBeFound2"));
     return dir;
   }
   async function switchVault(dir,retained) {
@@ -187,7 +230,7 @@ export function capacitorAdapter() {
     async function copyFolder(from,to) {
       await io.mkdir(to,{recursive:true});
       for(const entry of await previous.readdir(from,{withFileTypes:true})) {
-        if(entry.name!==basename(entry.name)||entry.name==='.'||entry.name==='..')throw Error('旧 Vault 包含无效路径。');
+        if(entry.name!==basename(entry.name)||entry.name==='.'||entry.name==='..')throw Error(tr("capacitorAdapter.theOldVaultContainsAnInvalidPath"));
         const source=posixPath(from,entry.name),target=posixPath(to,entry.name);
         if(entry.isDirectory())await copyFolder(source,target);
         else await Filesystem.copy({from:source.slice(1),to:target.slice(1),directory:Directory.Documents,toDirectory:directory});
@@ -204,12 +247,12 @@ export function capacitorAdapter() {
         await copyFolder(target,staging);
         await io.rename(staging,target);
       }catch(error){
-        storageWarning='部分旧知识库无法迁移，公开目录中的原件仍保留。'+String(error.message||error);
+        storageWarning=tr("capacitorAdapter.someOldVaultsCouldNotBeMigrated")+String(error.message||error);
       }
       if(storageWarning)return;
       await saveSetting('androidPrivateVaults',true);
     }catch(error){
-      storageWarning='旧 Vault 无法迁移到应用私有空间，公开目录中的原件仍保留。'+String(error.message||error);
+      storageWarning=tr("capacitorAdapter.theOldVaultCouldNotBeMigrated")+String(error.message||error);
     }
   }
   function restoreSession(session) {
@@ -231,59 +274,92 @@ export function capacitorAdapter() {
   }
   const newVaultPath=name=>{
     const label=validName(name);
-    if(!visible(label))throw Error('此名称由应用保留，请使用其他名称。');
+    if(!visible(label))throw Error(tr("capacitorAdapter.thisNameIsReservedChooseAnother"));
     return posixPath(base,label);
   };
   async function createVault(name,withWelcome=false) {
     const dir=newVaultPath(name);
     await io.mkdir(dir);
-    if(withWelcome)await io.writeFile(posixPath(dir,'欢迎使用 Calcite.md'),welcome);
+    if(withWelcome)await io.writeFile(posixPath(dir,tr('vault.welcomeFile')),welcome());
     return dir;
   }
-  async function read(path) {
-    const file=scoped(path);
-    if(!extension.test(file))throw Error('请选择 Markdown 或 Canvas 文件。');
-    const load=async()=>{
-      const stat=await io.stat(file);
-      const raw=await io.readFile(file,'utf8'),text=normalizeLineEndings(file,raw);
-      return {text,mtime:stat.mtimeMs,needsLf:text!==raw};
-    };
-    try{return await load();}
-    catch(error){
-      const replacing=replacements.get(file);
-      if(error.code!=='ENOENT'||!replacing)throw error;
-      await replacing;
-      return load();
+  async function readSnapshot(file,allowMissing=false) {
+    try{
+      for(let attempt=0;attempt<3;attempt++){
+        const before=await fs.freshStat(file);
+        if(!before.isFile()||before.size>(markdown.test(file)?16:5)*1024*1024)
+          throw Error(tr('main.theDocumentIsInvalidOrExceedsThe'));
+        const bytes=await io.readFile(file);
+        const hash=sha256(bytes);
+        const after=await fs.freshStat(file);
+        if(before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs||bytes.length!==after.size)continue;
+        const raw=decoder.decode(bytes),text=normalizeLineEndings(file,raw);
+        return {raw,text,mtime:after.mtimeMs,needsLf:raw!==text,
+          snapshot:{mtimeMs:after.mtimeMs,size:bytes.length,hash}};
+      }
+      throw Error(tr('dataSafety.unstableFile'));
+    }catch(error){
+      if(allowMissing&&error.code==='ENOENT')return null;
+      throw error;
     }
   }
-  async function atomicWrite(file,data) {
-    const temp=posixPath(dirname(file),'.calcite-'+randomId()+'.tmp');
-    try {
-      await io.writeFile(temp,data);
-      try {await io.rename(temp,file);}
-      catch(error) {
-        if(error.code!=='EEXIST'||!(await fs.exists(file))?.isFile())throw error;
-        const backup=posixPath(dirname(file),'.calcite-backup-'+basename(file));
-        let done;
-        replacements.set(file,new Promise(resolve=>{done=resolve;}));
-        try{
-          await io.rename(file,backup);
-          try {await io.rename(temp,file);}
-          catch(error){await io.rename(backup,file);throw error;}
-          await io.unlink(backup).catch(error=>{if(error.code!=='ENOENT')console.warn(error);});
-        }finally{done();replacements.delete(file);}
-      }
-    } catch(error){await io.unlink(temp).catch(()=>{});throw error;}
+  async function read(path,allowMissing) {
+    const file=scoped(path);
+    if(!extension.test(file))throw Error(tr('main.selectAMarkdownOrCanvasFile'));
+    const disk=await readSnapshot(file,allowMissing);
+    if(!disk)return null;
+    const {raw,...result}=disk;
+    return result;
   }
-  async function save({path,name,text,saved,mtime,saveAs}) {
-    if(path&&!saveAs) {
-      const previous=await fs.exists(scoped(path));
-      if(!previous)return {conflict:true};
-      const disk=normalizeLineEndings(path,await io.readFile(path,'utf8'));
-      if(typeof mtime==='number'&&disk!==normalizeLineEndings(path,saved??''))
-        return {conflict:true,text:disk,mtime:previous.mtimeMs};
-    } else {
-      const label=validName(noteName(name||'未命名.md'));
+  async function renameAtomic(from,to,temporary=false,exclusive=false) {
+    // The Android Filesystem plugin deletes an existing target before renaming
+    // and may fall back to copy/delete. Use the native atomic primitive here.
+    try{await AtomicFiles.rename({from,to,temporary,exclusive});}
+    catch(error){if(exclusive&&error.code==='EEXIST')return false;throw Error(tr('dataSafety.atomicReplaceFailed'),{cause:error});}
+    fs.invalidate(from,true);
+    fs.invalidate(to,true);
+    return true;
+  }
+  async function atomicWrite(file,data,beforeReplace=async()=>true,exclusive=false) {
+    const temp=posixPath(dirname(file),'.calcite-tmp-'+randomId());
+    try {
+      await io.writeFile(temp,data,{flag:'wx'});
+      if(!await beforeReplace())return false;
+      return await renameAtomic(temp,file,true,exclusive);
+    }finally{
+      await io.unlink(temp).catch(error=>{if(error.code!=='ENOENT')console.warn(error);});
+    }
+  }
+  async function flushDirectory(path) {
+    try{await AtomicFiles.flushDirectory({path});}
+    catch(error){throw Error(tr('dataSafety.atomicReplaceFailed'),{cause:error});}
+  }
+  function activity(dir=root,onRecoverFailure) {
+    if(!dir)throw Error(tr('main.openAWorkspaceFirst'));
+    return createActivityLog(dir,{io,path:{join:posixPath,dirname},write:atomicWrite,rename:renameAtomic,
+      id:randomId,hash:value=>sha256(value),
+      archive:(file,bytes)=>localGit.recordUndo(dir,file,bytes),
+      flush:flushDirectory,onRecoverFailure,
+      async sameFile(from,to){
+        try{return (await AtomicFiles.sameFile({from,to})).same;}
+        catch(error){throw Error(tr('dataSafety.atomicReplaceFailed'),{cause:error});}
+      },
+      async linkMove(from,to){
+        if(!await renameAtomic(from,to,false,true))throw Error(tr('activity.undoOccupied'));
+        await io.unlink(from);
+        await flushDirectory(dirname(from));
+      },
+      async safe(file){
+        if(!within(dir,file)||posixPath(file)!==file)throw Error(tr('dataSafety.invalidJournal'));
+        return file;
+      }});
+  }
+  async function save(data) {
+    let {path,name,saveAs}=data;
+    const chosen=!path||saveAs;
+    if(!chosen)path=scoped(path);
+    else {
+      const label=validName(noteName(name||tr('main.untitledName')));
       path=scoped(posixPath(root,label));
       if(await fs.exists(path)) {
         const ext=label.match(extension)[0];
@@ -292,9 +368,16 @@ export function capacitorAdapter() {
         while(await fs.exists(path));
       }
     }
-    text=normalizeLineEndings(path,text);
-    await atomicWrite(path,text);
-    return savedFile(path,text);
+    const result=await guardedSave(path,data,{chosen,read:()=>readSnapshot(path,true),
+      write:(text,guard)=>atomicWrite(path,text,guard),
+      archive:text=>data.resolution?localGit.recordExternal(root,path,text):
+        !localGit.isEnabled()?localGit.recordSaved(root,path,text):Promise.resolve()});
+    if(result.conflict||result.reloaded){
+      const {raw,...publicResult}=result;
+      return publicResult;
+    }
+    if(result.written)await savedFile(path,result.text);
+    return {path,...await read(path)};
   }
   async function savedFile(path,text) {
     const info=await io.stat(path);
@@ -307,17 +390,16 @@ export function capacitorAdapter() {
     return {path,mtime:info.mtimeMs};
   }
   async function importExternalFile(dir,{name,text}) {
-    if(!root||dir!==root)throw Error('知识库已切换，请重新确认导入。');
-    if(typeof text!=='string'||!text.trim())throw Error('外部文件为空。');
+    if(!root||dir!==root)throw Error(tr("capacitorAdapter.theActiveVaultChangedConfirmTheImport"));
+    if(typeof text!=='string'||!text.trim())throw Error(tr("capacitorAdapter.theExternalFileIsEmpty"));
     const stem=name.replace(/\.(?:md|markdown|mdown|txt)$/i,'').slice(0,84).replace(/[\uD800-\uDBFF]$/,'')
-      .replace(/[. ]+$/,'')||'未命名文档';
+      .replace(/[. ]+$/,'')||tr('android.untitled').replace(/\.md$/,'');
     const content=normalizeLineEndings('.md',text);
     for(let i=0;;i++){
       const label=validName(stem+(i?' ('+i+')':'')+'.md');
       const file=scoped(posixPath(root,label));
-      try{await io.writeFile(file,content,{flag:'wx'});}
-      catch(error){if(error.code==='EEXIST')continue;throw error;}
-      return savedFile(file,content);
+      if(await fs.exists(file))continue;
+      if(await atomicWrite(file,content,async()=>!await fs.exists(file),true))return savedFile(file,content);
     }
   }
   async function trash(path) {
@@ -338,45 +420,44 @@ export function capacitorAdapter() {
     }
     const from=scoped(path),info=await io.stat(from);
     if(type==='trash') {
-      await trash(from);
+      const logged=await activity().softDelete(from);
       await localGit.schedule(root);
-      return {tree:await tree()};
+      return {tree:await tree(true),activity:logged};
     }
-    if(!['move','rename'].includes(type))throw Error('未知文件操作。');
+    if(!['move','rename'].includes(type))throw Error(tr("main.unknownFileAction"));
     const label=type==='move'?basename(from):validName(info.isDirectory()?name:noteName(name,basename(from).match(extension)?.[0]||'.md'));
     const to=scoped(posixPath(type==='move'?scoped(parent,true):dirname(from),label));
     if(to===from)return {path:to,tree:await tree(),changes:[]};
-    if(await fs.exists(to)||within(from,to))throw Error('目标位置不可用或已存在。');
+    if(await fs.exists(to)||within(from,to))throw Error(tr("capacitorAdapter.theDestinationIsUnavailableOrAlreadyExists"));
     await index.refresh();
-    const {changes,refactor}=await planLinkRefactor(index,from,to,drafts,async file=>{
+    const {move,changes:noteChanges,refactor:noteRefactor}=await planLinkRefactor(index,from,to,drafts,async file=>{
       const {mtimeMs}=await io.stat(scoped(file));
-      return {text:await io.readFile(file,'utf8'),mtime:mtimeMs};
+      const bytes=await io.readFile(file);
+      try{return {text:strictDecoder.decode(bytes),mtime:mtimeMs};}
+      catch{throw Error(tr('dataSafety.invalidUtf8'));}
     });
+    const allCanvases=flat(await all(root)).filter(entry=>/\.canvas$/i.test(entry.path)).map(entry=>entry.path);
+    const {changes:canvasChanges,refactor:canvasRefactor}=await planCanvasLinkRefactor(index,move,allCanvases,drafts,async file=>{
+      const stat=await io.stat(scoped(file));
+      if(!stat.isFile()||stat.size>5*1024*1024)return null;
+      const bytes=await io.readFile(file);
+      return {text:strictDecoder.decode(bytes),mtime:stat.mtimeMs};
+    });
+    const changes=[...noteChanges,...canvasChanges];
+    const refactor={notes:noteRefactor.notes+canvasRefactor.notes,references:noteRefactor.references+canvasRefactor.references};
     for(const change of changes){
-      if(await io.readFile(change.from,'utf8')!==change.previous)throw Error('笔记已在别处修改，请重试。');
+      if(await io.readFile(change.from,'utf8')!==change.previous)throw Error(tr("capacitorAdapter.theNoteChangedElsewhereTryAgain"));
     }
-    const written=[];
-    await io.rename(from,to);
-    try{
-      for(const change of changes){
-        if(change.saved!==change.previous){
-          if(await io.readFile(change.path,'utf8')!==change.previous)throw Error('笔记已在别处修改，请重试。');
-          await atomicWrite(change.path,change.saved);
-          written.push(change);
-        }
-        change.mtime=(await io.stat(change.path)).mtimeMs;
-      }
-    }catch(error){
-      const rollback=await Promise.allSettled(written.map(change=>atomicWrite(change.path,change.previous)));
-      try{await io.rename(to,from);}
-      catch(failure){throw Error(error.message+'。文件移动回滚失败：'+failure.message);}
-      if(rollback.some(row=>row.status==='rejected'))throw Error(error.message+'。部分引用回滚失败。');
-      throw error;
+    const logged=await activity().refactor(type,from,to,changes);
+    for(const change of changes){
+      const {raw,mtime,snapshot,needsLf}=await readSnapshot(change.path);
+      Object.assign(change,raw===change.saved?{mtime,snapshot,needsLf}:{mtime:null});
+      if(change.path!==change.from)await localGit.relocateHistory(root,change.from,change.path).catch(()=>{});
     }
     revision++;
     uriCache.clear();imagePaths.clear();
-    localGit.schedule(root,...written.map(change=>change.path));
-    return {path:to,tree:await tree(),refactor,changes:changes.map(({previous,...row})=>({
+    localGit.schedule(root,...changes.map(change=>change.path));
+    return {path:to,tree:await tree(),refactor,activity:logged,changes:changes.map(({previous,...row})=>({
       ...row,saved:normalizeLineEndings(row.path,row.saved)
     }))};
   }
@@ -413,13 +494,13 @@ export function capacitorAdapter() {
   }
   async function readImage(url) {
     const file=imagePaths.get(url);
-    if(!file)throw Error('本地图片路径无效。');
+    if(!file)throw Error(tr("capacitorAdapter.invalidLocalImagePath"));
     const path=scoped(file);
     return {path,bytes:await io.readFile(path)};
   }
   async function attach({note,strategy,directory,mime,bytes}) {
     if(!Object.hasOwn(attachmentTypes,mime)||!bytes?.length||bytes.length>32*1024*1024)
-      throw Error('请选择小于 32 MiB 的受支持图片。');
+      throw Error(tr("capacitorAdapter.selectASupportedImageSmallerThan32"));
     note=scoped(note);
     const parent=dirname(note),pattern=directory.replaceAll('\${filename}',basename(note).replace(extension,''));
     const folder=scoped(posixPath(strategy==='workspace'?root:parent,...pattern.replace(/^\.[\\/]/,'').split(/[\\/]/).map(validName)),true);
@@ -434,17 +515,38 @@ export function capacitorAdapter() {
     const rows=await tree();
     await index.refresh();
     const used=new Set();
-    for(const row of await index.workspaceNotes('attachments',drafts))for(const ref of markdownImages(row.text)) {
-      const target=await resolveImage(row.path,ref.destination,ref.wiki);
-      if(target)used.add(target);
+    const byName=new Map();
+    for(const file of images.keys()){
+      const name=basename(file).toLowerCase();
+      if(!byName.has(name))byName.set(name,[]);
+      byName.get(name).push(file);
     }
+    async function markText(text,file) {
+      for(const ref of markdownImages(text)) {
+        const target=await resolveImage(file,ref.destination,ref.wiki);
+        if(target)used.add(target);
+      }
+      for(const hit of text.matchAll(/[^\s<>"'`|()[\]{}]+\.(?:png|jpe?g|gif|webp|svg|avif|bmp)(?=$|[\s<>"'#?`|()[\]{}])/gi)) {
+        const local=localReference(hit[0]);
+        if(local)for(const candidate of byName.get(basename(local).toLowerCase())||[])used.add(candidate);
+      }
+    }
+    for(const row of await index.workspaceNotes('attachments',drafts))await markText(row.text,row.path);
     for(const canvas of flat(rows).filter(entry=>/\.canvas$/i.test(entry.path))){
       const content=JSON.parse(await io.readFile(canvas.path,'utf8'));
-      if(!Array.isArray(content.nodes))throw Error('有画布格式无效，请修复后再清理附件。');
+      if(!Array.isArray(content.nodes))throw Error(tr("capacitorAdapter.fixTheInvalidCanvasBeforeCleaningUp"));
       for(const node of content.nodes){
-        if(typeof node.file!=='string')continue;
-        const target=await resolveImage(canvas.path,node.file,true);
-        if(target)used.add(target);
+        if(typeof node?.file==='string'){
+          for(const candidate of [node.file,'/'+node.file.replace(/^\//,'')]) {
+            const target=await resolveImage(canvas.path,candidate,true);
+            if(target)used.add(target);
+          }
+        }
+        if(typeof node?.background==='string'){
+          const target=await resolveImage(canvas.path,'/'+node.background.replace(/^\//,''),true);
+          if(target)used.add(target);
+        }
+        if(node?.type==='text'&&typeof node.text==='string')await markText(node.text,canvas.path);
       }
     }
     return Promise.all([...images.values()].filter(entry=>!used.has(entry.path)).map(async entry=>
@@ -475,8 +577,8 @@ export function capacitorAdapter() {
       return {type:match?.[1],data:match?.[2]};
     });
     if(!data||!Object.hasOwn(attachmentTypes,type))return null;
-    if(data.length>Math.ceil(32*1024*1024/3)*4)throw Error('剪贴板图片超过 32 MiB。');
-    return new File([fromBase64(data)],'图片.'+attachmentTypes[type],{type});
+    if(data.length>Math.ceil(32*1024*1024/3)*4)throw Error(tr("capacitorAdapter.theClipboardImageExceeds32Mib"));
+    return new File([fromBase64(data)],tr('common.image')+'.'+attachmentTypes[type],{type});
   }
   return {
     type:'capacitor',os:Capacitor.getPlatform(),
@@ -494,10 +596,16 @@ export function capacitorAdapter() {
         const fallback=dirs.find(item=>item.path===defaultPath);
         let next=restored?.path||fallback?.path;
         if(!next&&dirs.length&&(!selected||await fs.exists(defaultPath)))next=dirs[0].path;
-        next ||= await createVault('我的笔记',true);
-        const {initialFiles}=await mount(next,[],restored&&selected!==normalized?selected:undefined);
-        const session=restoreSession(await readSetting('session'));
-        return {root,config:{session,features:await readSetting('features')},initialFiles:
+        next ||= await createVault(tr('vault.initialName'),true);
+        const {initialFiles,recovered}=await mount(next,[],restored&&selected!==normalized?selected:undefined);
+        let rawSession;
+        try{rawSession=JSON.parse(await io.readFile(sessionFile,'utf8'));}
+        catch(error){
+          if(error?.code!=='ENOENT'&&!(error instanceof SyntaxError))console.warn(error);
+          rawSession=await readSetting('session');
+        }
+        const session=restoreSession(rawSession);
+        return {root,config:{session,recovered,features:await readSetting('features')},initialFiles:
           session?.tabs?.some(tab=>tab.path&&within(root,tab.path))?[]:initialFiles};
       },
       vaults:()=>serialize(async()=>Promise.all((await vaults()).map(async item=>({
@@ -515,7 +623,7 @@ export function capacitorAdapter() {
       renameVault:(path,name,retained)=>serialize(async()=>{
         const previous=await vaultPath(path),dir=newVaultPath(name);
         if(dir===previous)return null;
-        if(await fs.exists(dir))throw Error('已有同名知识库。');
+        if(await fs.exists(dir))throw Error(tr("capacitorAdapter.aVaultWithThatNameAlreadyExists"));
         localGit.guardTransfer(previous);
         await localGit.checkpoint(previous);
         await io.rename(previous,dir);
@@ -529,7 +637,8 @@ export function capacitorAdapter() {
         const remaining=(await vaults()).filter(item=>item.path!==dir);
         const next=dir===root?remaining[0]?.path:root;
         localGit.guardTransfer(dir,next);
-        const replacement=next||await createVault(dir===posixPath(base,'我的笔记')?'我的笔记 2':'我的笔记');
+        const initialName=tr('vault.initialName');
+        const replacement=next||await createVault(dir===posixPath(base,initialName)?tr('vault.fallbackName'):initialName);
         // Move the directory out of the vault list before recursive removal.
         const removed=posixPath(base,'.deleted-'+randomId());
         await io.rename(dir,removed);
@@ -538,18 +647,40 @@ export function capacitorAdapter() {
         catch(error){await io.rename(removed,dir);throw error;}
         const cleanup=await Promise.allSettled([localGit.remove(dir),io.rmdir(removed,{recursive:true})]);
         return {...result,deletedVault:dir,warning:cleanup.some(item=>item.status==='rejected')?
-          '知识库已移除，部分本机数据清理失败。':''};
+          tr("capacitorAdapter.theVaultWasRemovedButSomeLocal"):''};
       }),
       tree:()=>tree(),edit:update=>serialize(()=>edit(update)),
-      async listCanvases(){return (await io.readdir(root)).filter(name=>/\.canvas$/i.test(name));},
-      async readCanvas(name){const {text}=await read(posixPath(root,validName(name)));return {text,version:text};},
+      async listCanvases(){
+        if(!root)return [];
+        const locale=getLocale();
+        return flat(await all(root))
+          .filter(entry=>/\.canvas$/i.test(entry.path))
+          .map(entry=>entry.path.slice(root.length+1))
+          .sort((a,b)=>a.localeCompare(b,locale,{numeric:true}));
+      },
+      async readCanvas(name){
+        const parts=String(name||'').trim().replaceAll('\\','/').split('/').filter(Boolean);
+        if(!parts.length)throw Error(tr("main.enterANameForTheCanvas"));
+        const last=validName(parts.pop().replace(/\.canvas$/i,''))+'.canvas';
+        const {text}=await read(posixPath(root,...parts.map(validName),last));
+        return {text,version:sha256(text)};
+      },
       saveCanvas:({name,board,version})=>serialize(async()=>{
-        const file=scoped(posixPath(root,noteName(validName(name),'.canvas')));
-        const text=JSON.stringify(board,null,2);
-        if(version!==undefined&&(await read(file)).text!==version)throw Error('画布已在别处修改，请重新打开。');
-        if(version===undefined&&await fs.exists(file))throw Error('同名画布已存在。');
-        await atomicWrite(file,text);localGit.schedule(root,file);
-        return {name:basename(file),version:text};
+        const parts=String(name||'').trim().replaceAll('\\','/').split('/').filter(Boolean);
+        if(!parts.length)throw Error(tr("main.enterANameForTheCanvas"));
+        const last=validName(parts.pop().replace(/\.canvas$/i,''))+'.canvas';
+        const file=scoped(posixPath(root,...parts.map(validName),last));
+        const text=JSON.stringify(board,null,2)+'\n';
+        if(version!==undefined){
+          const expected=async()=>sha256((await read(file)).text)===version;
+          if(!await expected()||!await atomicWrite(file,text,expected))throw Error(tr("capacitorAdapter.theCanvasChangedElsewhereReopenIt"));
+        }else{
+          if(await fs.exists(file))throw Error(tr("capacitorAdapter.aCanvasWithThatNameAlreadyExists"));
+          await io.mkdir(dirname(file),{recursive:true});
+          await atomicWrite(file,text);
+        }
+        localGit.schedule(root,file);
+        return {name:file.slice(root.length+1),version:sha256(text)};
       })
     },
     index:{target:async({source,destination,wiki})=>{
@@ -568,15 +699,36 @@ export function capacitorAdapter() {
     export:exports,
     attachments:{scan:drafts=>serialize(()=>scan(drafts)),trash:({paths,drafts})=>serialize(async()=>{
       const allowed=new Set((await scan(drafts)).map(row=>row.path));
-      for(const path of paths)if(!allowed.has(path))throw Error('附件引用已变化，请重新扫描。');
+      for(const path of paths)if(!allowed.has(path))throw Error(tr("capacitorAdapter.attachmentReferencesChangedScanAgain"));
       for(const path of new Set(paths))await trash(scoped(path));
       if(paths.length)await localGit.schedule(root);
       return paths.length;
     })},
+    activity:{list:()=>serialize(()=>activity().list()),empty:()=>serialize(()=>activity().emptyTrash()),
+      undo:(id,token)=>serialize(async()=>{
+        const result=await activity().undo(id,token);
+        if(!result.activity)return result;
+        revision++;
+        uriCache.clear();imagePaths.clear();
+        for(const {from,path} of result.affected){
+          if(from&&from!==path)index.observe(from);
+          if(markdown.test(path))index.observe(path);
+        }
+        localGit.schedule(root,...result.affected.flatMap(row=>[row.from,row.path]).filter(Boolean));
+        return {...result,tree:await tree(true)};
+      })},
     sync:localGit.api,
     clipboard:{writeText:string=>Clipboard.write({string}),readText:async()=>(await Clipboard.read()).value,readImage:clipboardImage},
-    preferences:{saveSession:value=>saveSetting('session',value),saveFeatures:value=>saveSetting('features',value)},
-    window:{control:unavailable,setAppearance:async()=>({material:'css'}),discard:async()=>confirm('丢弃未保存的修改？'),
+    preferences:{saveSession,saveFeatures:value=>saveSetting('features',value),
+      ...(externalFiles?{syncNativeLanguage:locale=>ExternalFiles.setLocale({locale})}:{})},
+    window:{control:unavailable,async setAppearance({theme}={}){
+      const active=theme==='dark'?'dark':theme==='light'?'light':
+        globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches?'dark':'light';
+      if(android&&Capacitor.isPluginAvailable('CalciteSystemBars')) {
+        await SystemBars.setAppearance({theme:active}).catch(()=>{});
+      }
+      return {material:'css',theme:active};
+    },discard:async()=>confirm(tr("capacitorAdapter.discardUnsavedChanges")),
       quit:async()=>App.exitApp(),async ready(){
         await Network.getStatus().then(localGit.network).catch(()=>{});
         await Network.addListener('networkStatusChange',localGit.network).catch(()=>{});

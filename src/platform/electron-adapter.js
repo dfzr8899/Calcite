@@ -8,6 +8,7 @@ export function electronAdapter() {
     workspace:{bootstrap:bridge.bootstrap,folder:bridge.folder,close:bridge['close-vault'],tree:bridge.tree,edit:bridge['workspace-edit'],
       recentVaults:bridge['recent-vaults'],switchVault:bridge['switch-vault'],
       listCanvases:bridge['canvas-files'],readCanvas:bridge['canvas-read'],saveCanvas:bridge['canvas-save']},
+    activity:{list:bridge['activity:list'],undo:bridge['activity:undo'],empty:bridge['activity:empty']},
     index:{target:bridge['note-target'],backlinks:bridge.backlinks,graph:bridge['workspace-graph'],
       links:bridge['workspace-links'],health:bridge['workspace-health'],
       notes:bridge['workspace-notes'],search:bridge.search,searchSnapshot:bridge['search-index']},
@@ -20,7 +21,7 @@ export function electronAdapter() {
     clipboard:{writeText:bridge.writeClipboardText,paste:bridge.pasteClipboard},
     window:{control:bridge.windowControl,setAppearance:bridge.setWindowAppearance,external:bridge.external,
       discard:bridge.discard,quit:bridge.quit,ready:bridge.rendererReady},
-    preferences:{saveSession:bridge.session,saveFeatures:bridge.features},
+    preferences:{saveSession:bridge.session,saveFeatures:bridge.features,saveLanguage:bridge.setLanguage},
     events:{action:bridge.onAction,externalChange:bridge.onExternalChange,focus:bridge.onWindowFocus,windowState:bridge.onWindowState,sync:bridge.onSync}
   };
 }

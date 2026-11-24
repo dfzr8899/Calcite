@@ -1,3 +1,4 @@
+import {t as tr} from "./i18n/index.mjs";
 import git from 'isomorphic-git';
 import {remoteError} from './core/sync-config.mjs';
 
@@ -46,7 +47,7 @@ export async function syncRemote(engine,transport,branch,accept,{last,progress=(
         const localRef=await git.currentBranch(engine.args);
         const result=await git.push({...engine.args,...transport,ref:localRef,remoteRef:ref,remote:'calcite-sync',
           onPrePush:({remoteRef})=>remoteRef.oid===(fetched||'0'.repeat(40))});
-        if(!result.ok)throw Error('远端未接受推送。');
+        if(!result.ok)throw Error(tr("syncRemote.theRemoteRejectedThePush"));
         const [baseline,final]=await Promise.all([engine.tracked(fetched),engine.tracked(local)]);
         for(const file of new Set([...final.keys(),...baseline.keys()]))if(final.get(file)!==baseline.get(file))push++;
       });

@@ -1,8 +1,7 @@
+import {getLocale, t as tr} from "../shared/i18n/index.mjs";
 import {settingToggle,showDialog} from './mobile-ui.js';
 import { splitFrontmatter } from './note-metadata.js';
 import { noteHeadings } from './navigation.js';
-import { createCanvasView } from './canvas-view.js';
-import { showGraph } from './graph-view.js';
 
 export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,files,tabs,active,render,diagrams,open,openHeading,headingMatches,editProperty,changeTab,saveTab,remember,config,toast,fail}) {
   const overlay=document.createElement('dialog');
@@ -11,12 +10,12 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
   let graphPanel, graphRequest=0;
   const run = callback => (...args) => Promise.resolve().then(()=>callback(...args)).catch(fail);
   const drafts = () => tabs().filter(tab=>tab.path&&tab.dirty&&!tab.deleted).map(({path,text})=>({path,text}));
-  const requireRoot = () => { if(!root())throw Error('请先打开工作区。'); };
+  const requireRoot = () => { if(!root())throw Error(tr("gitSync.openAWorkspaceFirst")); };
   function dialog(title, markup) {
     graphRequest++;
     if (graphPanel?.open) graphPanel.close();
     if (overlay.open) overlay.close();
-    overlay.innerHTML='<header class="workspace-view-heading"><h2>'+escape(title)+'</h2><form method="dialog"><button aria-label="关闭" title="关闭">×</button></form></header>'+markup;
+    overlay.innerHTML='<header class="workspace-view-heading"><h2>'+escape(title)+`</h2><form method="dialog"><button aria-label="${tr("main.close")}" title="${tr("main.close")}">×</button></form></header>`+markup;
     showDialog(overlay);
     return overlay;
   }
@@ -25,28 +24,28 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
     requireRoot();
     const item = {path,heading};
     if (config().bookmarks.some(row=>bookmarkPath(row.path)===bookmarkPath(path)&&row.heading===heading)) {
-      toast('已收藏此位置');
+      toast(tr("workspaceViews.thisLocationIsAlreadyBookmarked"));
       return;
     }
     config().bookmarks.push(item);
     remember();
-    toast('已添加书签');
+    toast(tr("workspaceViews.bookmarkAdded"));
   }
   async function bookmarkHeading() {
     const tab=active();
-    if (!tab?.path) throw Error('请先保存当前笔记。');
+    if (!tab?.path) throw Error(tr("workspaceViews.saveTheCurrentNoteFirst"));
     const headings=noteHeadings(splitFrontmatter(tab.text).body);
-    const form=await ask('收藏笔记或标题','<label>位置<select name="heading"><option value="">整篇笔记</option>'+
-      headings.map(({text})=>'<option value="'+escape(text)+'">'+escape(text)+'</option>').join('')+'</select></label>','添加书签');
+    const form=await ask(tr("workspaceViews.bookmarkANoteOrHeading"),`<label>${tr("workspaceViews.location")}<select name="heading"><option value="">${tr("workspaceViews.entireNote")}</option>`+
+      headings.map(({text})=>'<option value="'+escape(text)+'">'+escape(text)+'</option>').join('')+'</select></label>',tr("workspaceViews.addBookmark"));
     if(form)await addBookmark(tab.path,String(form.get('heading')));
   }
   function bookmarks() {
     requireRoot();
     const items=config().bookmarks;
-    const panel=dialog('书签','<div class="bookmark-list">'+(items.length?items.map((item,i)=>
+    const panel=dialog(tr("main.bookmark"),'<div class="bookmark-list">'+(items.length?items.map((item,i)=>
       '<div><button data-bookmark="'+i+'" title="'+escape(relative(item.path))+'">'+escape(base(item.path))+
-      (item.heading?' · '+escape(item.heading):'')+'</button><button data-remove="'+i+'" aria-label="删除书签" title="删除书签">×</button></div>').join(''):
-      '<p class="side-empty">在标签页右键收藏笔记，或从命令面板收藏具体标题。</p>')+'</div>');
+      (item.heading?' · '+escape(item.heading):'')+'</button><button data-remove="'+i+`" aria-label="${tr("workspaceViews.removeBookmark")}" title="${tr("workspaceViews.removeBookmark")}">×</button></div>`).join(''):
+      `<p class="side-empty">${tr("workspaceViews.rightClickATabToBookmarkA")}</p>`)+'</div>');
     panel.querySelector('.bookmark-list').addEventListener('click',run(async event=>{
       const button=event.target.closest('button');
       if (!button) return;
@@ -63,10 +62,10 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
   async function graph(local=false) {
     requireRoot();
     const selected=active()?.path;
-    if (local && !selected) throw Error('请先打开一篇已保存的笔记。');
+    if (local && !selected) throw Error(tr("workspaceViews.openASavedNoteFirst"));
     const workspace=root();
     const request=++graphRequest;
-    const data=await platform.index.graph(drafts());
+    const [data,{showGraph}]=await Promise.all([platform.index.graph(drafts()),import('./graph-view.js')]);
     if (root()!==workspace || request!==graphRequest) return;
     if (graphPanel?.open) graphPanel.close();
     const panel=showGraph(data,{selected,relative,caseInsensitive:platform.os==='win32',local,open,fail});
@@ -79,17 +78,18 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
     const workspace=root();
     const notes=await platform.index.notes('metadata',drafts());
     if(root()!==workspace)return;
-    const keys=[...new Set(notes.flatMap(note=>Object.keys(note.values)))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
+    const locale=getLocale();
+    const keys=[...new Set(notes.flatMap(note=>Object.keys(note.values)))].sort((a,b)=>a.localeCompare(b,locale));
     const options=keys.map(key=>'<option value="'+escape(key)+'">'+escape(key)+'</option>').join('');
-    const panel=dialog('属性视图 · Bases',
-      '<div class="workspace-view-tools"><label>已保存视图 <select name="view"><option value="">临时视图</option>'+
+    const panel=dialog(tr("workspaceViews.propertiesBases"),
+      `<div class="workspace-view-tools"><label>${tr("workspaceViews.savedViews")} <select name="view"><option value="">${tr("workspaceViews.temporaryView")}</option>`+
       config().bases.map((view,index)=>'<option value="'+index+'">'+escape(view.name)+'</option>').join('')+
-      '</select></label><button data-view-action="save">保存视图</button><button data-view-action="delete">删除视图</button>'+
-      '<label>属性 <select name="property"><option value="">文件名</option>'+options+'</select></label>'+
-      '<input name="filter" placeholder="筛选文件名或属性值" aria-label="筛选属性视图">'+
-      '<label>排序 <select name="sort"><option value="">文件名</option>'+options+'</select></label>'+
-      settingToggle('descending','降序')+
-      '<label>布局 <select name="layout"><option value="table">表格</option><option value="cards">卡片</option></select></label>'+
+      `</select></label><button data-view-action="save">${tr("workspaceViews.saveView")}</button><button data-view-action="delete">${tr("workspaceViews.deleteView")}</button>`+
+      `<label>${tr("notes.properties")} <select name="property"><option value="">${tr("workspaceViews.fileName")}</option>`+options+'</select></label>'+
+      `<input name="filter" placeholder="${tr("workspaceViews.filterByFileNameOrProperty")}" aria-label="${tr("workspaceViews.filterPropertyView")}">`+
+      `<label>${tr("workspaceViews.sort")} <select name="sort"><option value="">${tr("workspaceViews.fileName")}</option>`+options+'</select></label>'+
+      settingToggle('descending',tr("main.descending"))+
+      `<label>${tr("workspaceViews.layout")} <select name="layout"><option value="table">${tr("main.table")}</option><option value="cards">${tr("workspaceViews.cards")}</option></select></label>`+
       '</div><div class="bases-results"></div>');
     const field=name=>panel.querySelector('[name='+name+']');
     if(saved) {
@@ -111,17 +111,17 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
       const value=note=>property?valueText(note.values[property]):relative(note.path);
       const ordered=notes.filter(note=>value(note).toLocaleLowerCase().includes(needle)).sort((a,b)=>{
         const left=sort?a.values[sort]:base(a.path), right=sort?b.values[sort]:base(b.path);
-        const comparison=typeof left==='number'&&typeof right==='number'?left-right:valueText(left).localeCompare(valueText(right),'zh-CN',{numeric:true});
+        const comparison=typeof left==='number'&&typeof right==='number'?left-right:valueText(left).localeCompare(valueText(right),locale,{numeric:true});
         return (descending?-1:1)*comparison;
       });
       const cell=note=>'<button data-open-note="'+escape(note.path)+'" title="'+escape(relative(note.path))+'">'+escape(base(note.path))+'</button>';
-      const edit=note=>'<button data-edit-note="'+escape(note.path)+'" title="编辑属性">编辑</button>';
+      const edit=note=>'<button data-edit-note="'+escape(note.path)+`" title="${tr("main.editProperties")}">${tr("main.edit")}</button>`;
       const columns=property?[property]:keys.slice(0,5);
       const grid=layout==='cards'?'<div class="base-cards">'+ordered.map(note=>'<article>'+cell(note)+'<dl>'+
         columns.map(key=>'<dt>'+escape(key)+'</dt><dd>'+escape(valueText(note.values[key]))+'</dd>').join('')+'</dl>'+edit(note)+'</article>').join('')+'</div>':
-        '<table><thead><tr><th>笔记</th>'+columns.map(key=>'<th>'+escape(key)+'</th>').join('')+'<th>属性</th></tr></thead><tbody>'+
+        `<table><thead><tr><th>${tr("canvasView.note")}</th>`+columns.map(key=>'<th>'+escape(key)+'</th>').join('')+`<th>${tr("notes.properties")}</th></tr></thead><tbody>`+
         ordered.map(note=>'<tr><td>'+cell(note)+'</td>'+columns.map(key=>'<td>'+escape(valueText(note.values[key]))+'</td>').join('')+'<td>'+edit(note)+'</td></tr>').join('')+'</tbody></table>';
-      output.innerHTML=ordered.length?grid:'<p class="side-empty">没有匹配的笔记。</p>';
+      output.innerHTML=ordered.length?grid:`<p class="side-empty">${tr("workspaceViews.noMatchingNotes")}</p>`;
       panel.querySelector('[data-view-action=delete]').disabled=field('view').value==='';
     }
     panel.querySelector('.workspace-view-tools').addEventListener('input',draw);
@@ -131,7 +131,7 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
     }));
     panel.querySelector('[data-view-action=save]').addEventListener('click',run(async()=>{
       const existing=field('view').value===''?undefined:config().bases[Number(field('view').value)];
-      const form=await ask('保存属性视图','<label>名称<input name="name" required value="'+escape(existing?.name||'')+'"></label>','保存');
+      const form=await ask(tr("workspaceViews.savePropertyView"),`<label>${tr("canvasView.name")}<input name="name" required value="`+escape(existing?.name||'')+'"></label>',tr("main.save"));
       const name=String(form?.get('name')||'').trim();
       if(!name)return;
       const view={...state(),name};
@@ -174,7 +174,7 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
     splitRead.hidden=editing;
     splitSource.readOnly=target===active();
     split.querySelector('[data-split-save]').disabled=target===active();
-    split.querySelector('[data-split-status]').textContent=editing&&splitSource.readOnly?'请在左侧编辑当前笔记':'';
+    split.querySelector('[data-split-status]').textContent=editing&&splitSource.readOnly?tr("workspaceViews.editTheCurrentNoteInTheLeft"):'';
     if(editing) {
       if(splitSource.value!==text)splitSource.value=text;
       if(scroll)splitSource.scrollTop=scroll.source;
@@ -201,7 +201,7 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
     run(renderSplit)();
   }
   function openSplit(tab=active(),{heading,reading}={}){
-    if(!tab)throw Error('请先打开笔记。');
+    if(!tab)throw Error(tr("noteWorkflows.openANoteFirst2"));
     captureSplit();
     target=tab;targetHeading=heading;split.hidden=false;splitDivider.hidden=false;
     if(reading!==undefined)splitMode.value=reading?'read':'source';
@@ -226,8 +226,12 @@ export function createWorkspaceViews({$,platform,ask,escape,base,relative,root,f
     splitDivider.addEventListener('lostpointercapture',()=>splitDivider.removeEventListener('pointermove',resize),{once:true});
   });
 
+  let canvasRunner;
   return {addBookmark,bookmarkHeading,bookmarks,graph,bases,openSplit,refreshSplit,closeSplit,
     focusedTab:()=>document.activeElement===splitSource&&!splitSource.readOnly?target:null,
     beforeQuit:()=>overlay.confirmClose?.()??true,
-    canvas:createCanvasView({platform,dialog,ask,escape,root,files,relative,open,toast,fail})};
+    async canvas(){
+      canvasRunner??=(await import('./canvas-view.js')).createCanvasView({platform,dialog,ask,escape,root,files,relative,open,toast,fail});
+      return canvasRunner();
+    }};
 }

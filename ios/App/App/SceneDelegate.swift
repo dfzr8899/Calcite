@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 import WebKit
 import Security
 import CryptoKit
+import Darwin
 
 @objc(CalciteSecureStorage)
 class CalciteSecureStorage: CAPPlugin, CAPBridgedPlugin {
@@ -92,10 +93,90 @@ class CalciteRichClipboard: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
+@objc(CalciteAtomicFiles)
+class CalciteAtomicFiles: CAPPlugin, CAPBridgedPlugin {
+    let identifier = "CalciteAtomicFiles"
+    let jsName = "CalciteAtomicFiles"
+    let pluginMethods = ["rename", "flushDirectory", "sameFile"].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
+
+    private func scoped(_ path: String?) throws -> URL {
+        guard let path, path.hasPrefix("/CalciteVaults/"), !path.contains("\0"),
+              let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw POSIXError(.EINVAL)
+        }
+        let root = documents.resolvingSymlinksInPath()
+        let file = root.appendingPathComponent(String(path.dropFirst()))
+        guard file.path == file.standardizedFileURL.path,
+              file.path == file.resolvingSymlinksInPath().path else {
+            throw POSIXError(.EINVAL)
+        }
+        return file
+    }
+
+    private func flush(_ file: URL) throws {
+        let descriptor = Darwin.open(file.path, O_RDONLY)
+        guard descriptor >= 0 else { throw POSIXError(.EIO) }
+        defer { Darwin.close(descriptor) }
+        guard fsync(descriptor) == 0 else { throw POSIXError(.EIO) }
+    }
+
+    @objc func flushDirectory(_ call: CAPPluginCall) {
+        do {
+            try flush(scoped(call.getString("path")))
+            call.resolve()
+        } catch {
+            call.reject("Directory sync failed", "ATOMIC_RENAME", error)
+        }
+    }
+
+    @objc func sameFile(_ call: CAPPluginCall) {
+        do {
+            let from = try scoped(call.getString("from")), to = try scoped(call.getString("to"))
+            var first = stat(), second = stat()
+            guard Darwin.lstat(from.path, &first) == 0, Darwin.lstat(to.path, &second) == 0 else {
+                throw POSIXError(.EIO)
+            }
+            call.resolve(["same": first.st_dev == second.st_dev && first.st_ino == second.st_ino])
+        } catch {
+            call.reject("File identity check failed", "ATOMIC_RENAME", error)
+        }
+    }
+
+    @objc func rename(_ call: CAPPluginCall) {
+        do {
+            let from = try scoped(call.getString("from")), to = try scoped(call.getString("to"))
+            let source = from.deletingLastPathComponent(), target = to.deletingLastPathComponent()
+            if call.getBool("temporary") == true {
+                guard source == target, from.lastPathComponent.hasPrefix(".calcite-tmp-") else {
+                    throw POSIXError(.EINVAL)
+                }
+                try flush(from)
+            }
+            if call.getBool("exclusive") == true {
+                if Darwin.link(from.path, to.path) != 0 {
+                    if errno == EEXIST {
+                        call.reject("Destination already exists", "EEXIST")
+                        return
+                    }
+                    throw POSIXError(.EIO)
+                }
+            } else {
+                guard Darwin.rename(from.path, to.path) == 0 else { throw POSIXError(.EIO) }
+            }
+            try flush(target)
+            if source != target { try flush(source) }
+            call.resolve()
+        } catch {
+            call.reject("Atomic rename failed", "ATOMIC_RENAME", error)
+        }
+    }
+}
+
 class CalciteBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(CalciteRichClipboard())
         bridge?.registerPluginInstance(CalciteSecureStorage())
+        bridge?.registerPluginInstance(CalciteAtomicFiles())
         bridge?.registerPluginInstance(CalciteDocumentCapture())
     }
 }

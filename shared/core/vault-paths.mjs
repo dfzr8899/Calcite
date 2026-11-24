@@ -1,3 +1,4 @@
+import {t as tr} from "../i18n/index.mjs";
 /** @param {string[]} parts */
 export function posixPath(...parts) {
   const result = [];
@@ -35,6 +36,6 @@ export function withinNativePath(path,parent,child) {
 export function fsError(code,path,cause) {
   const nativeCode=cause?.code;
   const detail=code==='EIO'&&cause?
-    ' · 原生文件错误'+(nativeCode&&nativeCode!==code?' '+nativeCode:'')+'：'+String(cause.message||cause):'';
+    ` ${tr("vaultPaths.nativeFileError")}`+(nativeCode&&nativeCode!==code?' '+nativeCode:'')+'：'+String(cause.message||cause):'';
   return Object.assign(new Error(code+': '+path+detail,{cause}),{code,path,nativeCode});
 }

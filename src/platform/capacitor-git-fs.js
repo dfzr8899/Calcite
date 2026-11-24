@@ -179,5 +179,5 @@ export function createCapacitorGitFs(filesystem,directory='DOCUMENTS',{sandboxed
       invalidate(to,true);
     }
   };
-  return {promises,exists,withSession,freshStat};
+  return {promises,exists,withSession,freshStat,invalidate};
 }

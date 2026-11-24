@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import katex from 'katex';
 import {Plugin} from '@milkdown/kit/prose/state';
 
@@ -5,12 +6,12 @@ export function parseMacros(input) {
   if (!input.trim()) return {};
   const macros=input.trimStart().startsWith('{')?JSON.parse(input):Object.fromEntries(input.split(/\r?\n/).filter(row=>row.trim()).map(row=>{
     const at=row.indexOf('=');
-    if(at<1)throw Error('请使用「宏名 = 展开定义」或 JSON 对象。');
+    if(at<1)throw Error(tr("mathOptions.useMacroExpansionOrAJsonObject"));
     return [row.slice(0,at).trim(),row.slice(at+1).trim()];
   }));
   if (!macros||typeof macros!=='object'||Array.isArray(macros)||Object.entries(macros).length>100||
       Object.entries(macros).some(([key,value])=>!/^\\[A-Za-z@]+$/.test(key)||typeof value!=='string'||!value||value.length>2048)) {
-    throw Error('公式宏必须使用反斜杠命令名与非空展开定义。');
+    throw Error(tr("mathOptions.useABackslashCommandNameAndA"));
   }
   return macros;
 }

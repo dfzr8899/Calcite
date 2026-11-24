@@ -1,11 +1,13 @@
+import {t as tr} from "../i18n/index.mjs";
 import git from 'isomorphic-git';
 import diff3 from 'diff3';
-import Sha1 from 'sha.js/sha1.js';
+import {sha1} from './sha.mjs';
 import {Buffer} from 'buffer';
 import {isTextFile,normalizeLineEndings} from '../text-files.mjs';
 import {localTimestamp} from '../local-time.mjs';
 import {fileSignature} from './vault-index.mjs';
 import {createSyncHistory} from './sync-history.mjs';
+import {conflictCopyName} from './sync-conflicts.mjs';
 
 /** @import {PromiseFsClient, ParsedObject, RawObject} from 'isomorphic-git' */
 /** @import {ConflictItem, PathOperations} from './types.mjs' */
@@ -13,7 +15,7 @@ import {createSyncHistory} from './sync-history.mjs';
 /** @typedef {{name: string, email: string}} GitAuthor */
 /** @typedef {{relative: string, file: string, previous: string|null|undefined, next: string|null|undefined}} GitChange */
 /** @typedef {{phase: string, done?: number, total?: number}} SyncProgress */
-/** @typedef {{beforeWrite?: (rows: (Omit<GitChange,'next'> & {next: Uint8Array|null})[]) => void|Promise<void>, progress?: (value: SyncProgress) => void, onBatch?: (rows: GitChange[]) => void|Promise<void>}} ApplyHooks */
+/** @typedef {{conflictStrategy?: import('./types.mjs').SyncConfig['conflictStrategy'], beforeWrite?: (rows: (Omit<GitChange,'next'> & {next: Uint8Array|null})[]) => void|Promise<void>, progress?: (value: SyncProgress) => void, onBatch?: (rows: GitChange[]) => void|Promise<void>}} ApplyHooks */
 /**
  * @typedef {object} GitOptions
  * @property {GitFs} fs
@@ -28,12 +30,12 @@ import {createSyncHistory} from './sync-history.mjs';
 
 export const FILE_LIMIT=50*1024*1024;
 export const OID=/^[0-9a-f]{40}$/;
-const ignored=['*.tmp','*.crdownload','desktop.ini','.DS_Store','.trash/','.calcite/','.env','.env.*','*.pfx','*.p12','*.key',
+const ignored=['*.tmp','*.crdownload','desktop.ini','.DS_Store','.trash/','.calcite/','.calcite-tmp-*','.env','.env.*','*.pfx','*.p12','*.key',
   '*.exe','*.out','*.o','*.obj','*.pdb','*.class','node_modules/'];
 const missing=error=>['ENOENT','ENOTDIR'].includes(error.code);
-const gitOid=(type,bytes)=>new Sha1().update(type+' '+bytes.length+'\0').update(bytes).digest('hex');
+const gitOid=(type,bytes)=>sha1(type+' '+bytes.length+'\0',bytes);
 const objectTypes=['blob','tree','commit'];
-const internalPath=file=>file.split('/').some(part=>/^\.(?:git|calcite|trash)$/i.test(part));
+const internalPath=file=>file.split('/').some(part=>/^\.(?:git$|calcite$|trash$|calcite-tmp-)/i.test(part));
 const rulesFile=/(?:^|\/)\.(?:gitignore|gitattributes)$/i;
 const historyTrailer='Calcite-Sync-Backup: ';
 
@@ -72,16 +74,16 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
   function confined(root) {
     async function safe(file) {
       const absolute=path.resolve(sandboxed&&file==='.'?root:file);
-      if(!within(root,absolute))throw Error('Git 路径超出当前工作区。');
-      if(!sandboxed&&(await fs.lstat(root)).isSymbolicLink())throw Error('工作区目录已改变，请重新打开。');
+      if(!within(root,absolute))throw Error(tr("gitEngine.gitPathIsOutsideTheCurrentWorkspace"));
+      if(!sandboxed&&(await fs.lstat(root)).isSymbolicLink())throw Error(tr("gitEngine.theWorkspaceDirectoryChangedOpenItAgain"));
       let parent=root;
       for(const piece of path.relative(root,absolute).split(path.sep).filter(Boolean)) {
-        if(piece.includes(':')||/[\x00-\x1f]/.test(piece))throw Error('Git 路径无效。');
+        if(piece.includes(':')||/[\x00-\x1f]/.test(piece))throw Error(tr("gitEngine.invalidGitPath"));
         if(sandboxed)continue;
         parent=path.join(parent,piece);
         const info=await fs.lstat(parent).catch(error=>{if(!missing(error))throw error;});
         if(!info)break;
-        if(info.isSymbolicLink())throw Error('Git 同步不会读取或写入符号链接。');
+        if(info.isSymbolicLink())throw Error(tr("gitEngine.gitSyncCannotReadOrWriteSymlinks"));
       }
       return absolute;
     }
@@ -93,7 +95,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       stat:guarded('stat'),readdir:guarded('readdir'),mkdir:guarded('mkdir'),rmdir:guarded('rmdir'),
       unlink:guarded('unlink'),chmod:guarded('chmod'),readlink:guarded('readlink'),
       rename:async(from,to)=>fs.rename(await safe(from),await safe(to)),
-      symlink:async()=>{throw Error('Git 同步不允许创建符号链接。');}
+      symlink:async()=>{throw Error(tr("gitEngine.gitSyncCannotCreateSymlinks"));}
     };
     promises.writeFile=async(file,data,options)=>{
       const absolute=await safe(file);
@@ -106,10 +108,10 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
   }
   
   function treePath(root,file) {
-    if(!file||file.startsWith('/')||file.includes('\\')||file.split('/').some(piece=>!piece||/^(?:\.\.?|\.git|\.gitmodules|\.trash|\.calcite)$/i.test(piece)
-        ||/[<>:"|?*\x00-\x1f]|[. ]$|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(piece))) throw Error('Git 树含不安全或不受支持的路径。');
+    if(!file||file.startsWith('/')||file.includes('\\')||file.split('/').some(piece=>!piece||internalPath(piece)||/^(?:\.\.?|\.gitmodules)$/i.test(piece)
+        ||/[<>:"|?*\x00-\x1f]|[. ]$|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(piece))) throw Error(tr("gitEngine.theGitTreeContainsAnUnsafeOr"));
     const absolute=path.resolve(root,...file.split('/'));
-    if(!within(root,absolute))throw Error('Git 树路径超出工作区。');
+    if(!within(root,absolute))throw Error(tr("gitEngine.aGitTreePathPointsOutsideThe"));
     return absolute;
   }
   class GitEngine {
@@ -132,12 +134,12 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       const folder=path.join(this.root,'.git');
       const stat=await fs.lstat(folder).catch(error=>{if(!missing(error))throw error;});
       if(!stat)await git.init({...this.args,defaultBranch:'main'});
-      else if(!stat.isDirectory()||stat.isSymbolicLink())throw Error('工作区的 .git 必须是本地目录。');
-      if(await git.getConfig({...this.args,path:'core.worktree'}))throw Error('不支持绑定到其他工作树的 Git 配置。');
+      else if(!stat.isDirectory()||stat.isSymbolicLink())throw Error(tr("gitEngine.theWorkspaceGitMustBeALocal"));
+      if(await git.getConfig({...this.args,path:'core.worktree'}))throw Error(tr("gitEngine.gitConfigurationsLinkedToAnotherWorktreeAre"));
       const ignore=await this.guard.safe(path.join(this.root,'.gitignore'));
       if(!stat&&!await fs.lstat(ignore).catch(error=>{if(!missing(error))throw error;}))
         await atomicWrite(ignore,['# Calcite',...ignored,''].join('\n'));
-      if(!await git.currentBranch({...this.args,fullname:true}))throw Error('请使用普通分支，当前仓库处于分离 HEAD。');
+      if(!await git.currentBranch({...this.args,fullname:true}))throw Error(tr("gitEngine.theRepositoryHasADetachedHeadSwitch"));
     }
   
     async head() {
@@ -214,7 +216,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
         if(internalPath(file))return null;
         const type=await entry.type();
         if(type==='tree')return undefined;
-        if(type!=='blob'||![0o100644,0o100755].includes(await entry.mode()))throw Error('Git 同步不支持符号链接或子模块。');
+        if(type!=='blob'||![0o100644,0o100755].includes(await entry.mode()))throw Error(tr("gitEngine.gitSyncDoesNotSupportSymlinksOr"));
         const stat=await entry.stat();
         const mtimeMs=stat.mtimeSeconds*1000+Math.floor(stat.mtimeNanoseconds/1000000);
         return [file,{oid:await entry.oid(),signature:fileSignature({mtimeMs,size:stat.size})}];
@@ -232,7 +234,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       const head=await this.head();
       const checkpoint=await this.loadCheckpoint(head);
       const entries=sandboxed?await this.worktree():null;
-      if(entries)this.legacyCandidates=[...entries.keys()].filter(file=>file.includes(' (同步冲突 '));
+      if(entries)this.legacyCandidates=[...entries.keys()].filter(file=>/ \((?:同步冲突|conflict) /.test(file));
       /** @type {[string, number, number, number][]} */
       let rows=[];
       let staged,tracked;
@@ -245,28 +247,28 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
             if(this.dirtyPaths.has(file)||known.get(file)!==fileSignature(stat)||staged&&staged.get(file)?.oid!==tracked.get(file))
               rows.push([file,1,2,1]);
           }else if(tracked?.has(file)){
-            throw Error('Git 暂存区与磁盘有不同版本，请先处理 Git 暂存区。');
+            throw Error(tr("gitEngine.theGitIndexAndDiskHaveDifferent"));
           }else if(!await git.isIgnored({...this.args,filepath:file}))rows.push([file,0,2,0]);
         }
         for(const file of known.keys())if(!entries.has(file)){
-          if(staged&&staged.get(file)?.oid!==tracked.get(file))throw Error('Git 暂存区与磁盘有不同版本，请先处理 Git 暂存区。');
+          if(staged&&staged.get(file)?.oid!==tracked.get(file))throw Error(tr("gitEngine.theGitIndexAndDiskHaveDifferent"));
           rows.push([file,1,0,1]);
         }
         if(staged)for(const file of tracked.keys())if(!staged.has(file)&&!entries.has(file))rows.push([file,1,0,0]);
         if(checkpoint&&!rows.length){this.dirtyPaths.clear();return head;}
       }else{
         const status=await git.statusMatrix({...this.args,filter:file=>!internalPath(file)});
-        if(!entries)this.legacyCandidates=status.filter(([file,,work])=>work&&file.includes(' (同步冲突 ')).map(([file])=>file);
+        if(!entries)this.legacyCandidates=status.filter(([file,,work])=>work&&/ \((?:同步冲突|conflict) /.test(file)).map(([file])=>file);
         rows=status
           .filter(([,old,work,stage])=>old!==work||old!==stage);
       }
       const dirty=new Map();
       for(const [file,,work,stage] of rows) {
         const absolute=await this.guard.safe(treePath(this.root,file));
-        if(stage===3||stage===2&&work!==2)throw Error('Git 暂存区与磁盘有不同版本，请先处理 Git 暂存区。');
+        if(stage===3||stage===2&&work!==2)throw Error(tr("gitEngine.theGitIndexAndDiskHaveDifferent"));
         if(work){
           const stat=await fs.stat(absolute);
-          if(stat.size>FILE_LIMIT)throw Error('单文件超过 50 MiB，无法提交：'+file);
+          if(stat.size>FILE_LIMIT)throw Error(tr("gitEngine.cannotCommitAFileLargerThan50")+file);
           dirty.set(file,fileSignature(stat));
         }
       }
@@ -277,11 +279,13 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
         const bytes=/** @type {Uint8Array} */ (await fs.readFile(absolute));
         const stagedOid=staged?.get(file)?.oid;
         if(stagedOid&&stagedOid!==tracked.get(file)&&stagedOid!==gitOid('blob',bytes))
-          throw Error('Git 暂存区与磁盘有不同版本，请先处理 Git 暂存区。');
-        const normalized=normalizeLineEndings(file,bytes);
+          throw Error(tr("gitEngine.theGitIndexAndDiskHaveDifferent"));
+        // Keep locally refactored Markdown byte-for-byte intact when auto-sync
+        // snapshots it. Editor saves and incoming Git compatibility are separate.
+        const normalized=/\.(?:md|markdown|mdown)$/i.test(file)?bytes:normalizeLineEndings(file,bytes);
         if(normalized!==bytes){
           const stat=await freshStat(absolute);
-          if(!Buffer.from(await fs.readFile(absolute)).equals(bytes))throw Error('提交前检测到文件已变化，请重试。');
+          if(!Buffer.from(await fs.readFile(absolute)).equals(bytes))throw Error(tr("gitEngine.aFileChangedBeforeItCouldBe"));
           await atomicWrite(absolute,normalized);
           const signature=fileSignature(await freshStat(absolute));
           this.normalizedTimes.set(file,{signature,time:stat.mtimeMs});
@@ -313,18 +317,18 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
         treePath(this.root,file);
         const type=await entry.type();
         if(type==='tree')return undefined;
-        if(type!=='blob'||![0o100644,0o100755].includes(await entry.mode())) throw Error('Git 同步不支持符号链接或子模块。');
+        if(type!=='blob'||![0o100644,0o100755].includes(await entry.mode())) throw Error(tr("gitEngine.gitSyncDoesNotSupportSymlinksOr"));
         return [file,await entry.oid()];
       }});
       const result=new Map(/** @type {[string, string][]} */ (rows));
-      if(caseInsensitive&&new Set([...result.keys()].map(file=>file.toLowerCase())).size!==result.size)throw Error('Git 分支包含 Windows 无法共存的同名路径。');
+      if(caseInsensitive&&new Set([...result.keys()].map(file=>file.toLowerCase())).size!==result.size)throw Error(tr("gitEngine.theGitBranchContainsFilenamesThatConflict"));
       return result;
     }
   
     async blob(oid) {
       if(!oid)return null;
       const bytes=Buffer.from((await git.readBlob({...this.args,oid})).blob);
-      if(bytes.length>FILE_LIMIT)throw Error('远端包含超过 50 MiB 的文件。');
+      if(bytes.length>FILE_LIMIT)throw Error(tr("gitEngine.theRemoteContainsAFileLargerThan"));
       return bytes;
     }
 
@@ -388,16 +392,34 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       return async(head,relative,version,base)=>{
         const slash=relative.lastIndexOf('/');
         const dir=slash<0?'':relative.slice(0,slash),name=relative.slice(slash+1);
-        for(let oid=head;;){
-          const commit=await readCommit(oid),parent=commit.parent[0];
-          if(!parent||parent===base||shallow.has(oid))return commit.committer.timestamp*1000;
-          const previous=await readCommit(parent).catch(error=>{
-            if(error.code!=='NotFoundError')throw error;
-            return null;
-          });
-          if(!previous||(await readDirectory(previous.tree,dir)).get(name)!==version)return commit.committer.timestamp*1000;
-          oid=parent;
+        const visited=new Set();
+        const queue=[head];
+        let latest=0;
+        while(queue.length){
+          const oid=queue.shift();
+          if(!oid||visited.has(oid))continue;
+          visited.add(oid);
+          const commit=await readCommit(oid);
+          const stamp=commit.committer.timestamp*1000;
+          if(!commit.parent.length||shallow.has(oid)){
+            if(stamp>latest)latest=stamp;
+            continue;
+          }
+          let matchedParent=false;
+          for(const parent of commit.parent){
+            if(parent===base)continue;
+            const previous=await readCommit(parent).catch(error=>{
+              if(error.code!=='NotFoundError')throw error;
+              return null;
+            });
+            if(previous&&(await readDirectory(previous.tree,dir)).get(name)===version){
+              matchedParent=true;
+              queue.push(parent);
+            }
+          }
+          if(!matchedParent&&stamp>latest)latest=stamp;
         }
+        return latest||(await readCommit(head)).committer.timestamp*1000;
       };
     }
   
@@ -407,8 +429,8 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
     }
 
     /** @param {string} theirs @param {GitAuthor} author @param {ApplyHooks} [hooks] */
-    async applyWorkingTree(theirs,author,{beforeWrite=()=>{},progress=()=>{},onBatch=()=>{}}={}) {
-      if(!OID.test(theirs))throw Error('远端提交 ID 无效。');
+    async applyWorkingTree(theirs,author,{conflictStrategy='lww-history',beforeWrite=()=>{},progress=()=>{},onBatch=()=>{}}={}) {
+      if(!OID.test(theirs))throw Error(tr("gitEngine.invalidRemoteCommitId"));
       const ours=await this.head();
       if(theirs===ours)return {changes:[],conflicts:[],resolved:[]};
       const fast=!ours||await git.isDescendent({...this.args,oid:theirs,ancestor:ours,depth:-1});
@@ -422,6 +444,8 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       /** @type {ConflictItem[]} */
       const conflicts=[];
       const resolved=[],backups=await this.incomingBackups(theirs,right);
+      const copies=new Set();
+      const occupied=new Set([...files].map(file=>caseInsensitive?file.toLowerCase():file));
       let changeTime;
       for(const relative of files) {
         const old=before.get(relative),local=left.get(relative),remote=right.get(relative);
@@ -441,8 +465,10 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
           changes.push({relative,file,previous:local,next:remote});
           continue;
         }
-        const combined=rulesFile.test(relative)?mergeRules(baseText,leftText,rightText):leftText&&rightText&&isTextFile(relative)?
-          (leftText.equals(rightText)?leftText:mergeText(baseText||Buffer.alloc(0),leftText,rightText)):null;
+        if(leftText&&rightText?.equals(leftText))continue;
+        const combined=rulesFile.test(relative)?mergeRules(baseText,leftText,rightText):
+          conflictStrategy==='lww-history'&&leftText&&rightText&&isTextFile(relative)?
+            mergeText(baseText||Buffer.alloc(0),leftText,rightText):null;
         if(combined) {
           if(!previous||!combined.equals(previous)) {
             const oid=await git.writeBlob({...this.args,blob:combined});
@@ -450,7 +476,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
           }
           continue;
         }
-        if(isTextFile(relative)){
+        if(conflictStrategy==='lww-history'&&isTextFile(relative)){
           changeTime??=await this.fileChangeClock();
           const remoteTime=await changeTime(theirs,relative,remote,base);
           const stat=local?await freshStat(file).catch(error=>{if(!missing(error))throw error;return null;}):null;
@@ -466,15 +492,17 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
         }
         let copy;
         if(incoming) {
-          const extension=path.extname(relative),baseName=relative.slice(0,relative.length-extension.length||relative.length);
+          const extension=path.extname(relative);
           const stamp=localTimestamp();
           let serial=0,relativeCopy;
           do{
-            relativeCopy=baseName+` (同步冲突 ${stamp}${serial?' '+serial:''})`+extension;
+            relativeCopy=conflictCopyName(relative,extension,stamp,serial);
             serial++;
             copy=await this.guard.safe(treePath(this.root,relativeCopy));
-          }while(files.has(relativeCopy)||await fs.lstat(copy).then(()=>true,error=>{if(!missing(error))throw error;return false;}));
-          files.add(relativeCopy);
+          }while(occupied.has(caseInsensitive?relativeCopy.toLowerCase():relativeCopy)||
+            await fs.lstat(copy).then(()=>true,error=>{if(!missing(error))throw error;return false;}));
+          occupied.add(caseInsensitive?relativeCopy.toLowerCase():relativeCopy);
+          copies.add(relativeCopy);
           changes.push({relative:relativeCopy,file:copy,previous:null,next:remote});
         }
         conflicts.push({path:file,copy:copy||null});
@@ -494,7 +522,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       }
       if(group.length)groups.push(group);
       for(const rows of groups)await settleGroup(rows,async row=>{
-        if(!await matches(row,row.previous))throw Error('同步准备期间磁盘内容有变动，请重试。');
+        if(!await matches(row,row.previous))throw Error(tr("gitEngine.aFileChangedWhileSyncWasPreparing"));
       });
       for(const backup of backups){
         await this.history.record(backup.file,await this.blob(backup.loser),backup.reason,backup.identity);
@@ -509,7 +537,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       const write=async(row,value,normalize=false)=>{
         await this.guard.safe(row.file);
         let bytes=await this.blob(value);
-        if(normalize&&bytes){
+        if(normalize&&bytes&&!copies.has(row.relative)){
           const next=normalizeLineEndings(row.relative,bytes);
           if(next!==bytes){
             bytes=Buffer.from(next);
@@ -523,7 +551,14 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
           if(!directories.has(parent))directories.set(parent,fs.mkdir(parent,{recursive:true}));
           await directories.get(parent);
           await atomicWrite(row.file,bytes);
-        }else await fs.unlink(row.file);
+        }else {
+          await fs.unlink(row.file);
+          for(let parent=path.dirname(row.file);parent!==this.root&&within(this.root,parent);parent=path.dirname(parent)){
+            if(internalPath(path.relative(this.root,parent).split(path.sep).join('/')))break;
+            try{await fs.rmdir(parent);directories.delete(parent);}
+            catch{break;}
+          }
+        }
       };
       const publish=async()=>{
         if(!pending.length)return;
@@ -534,7 +569,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
         progress({phase:'write',done:0,total:changes.length});
         for(const rows of groups) {
           await settleGroup(rows,async row=>{
-            if(!await matches(row,row.previous))throw Error('同步时检测到另一程序写入，请重试。');
+            if(!await matches(row,row.previous))throw Error(tr("gitEngine.anotherProgramWroteToAFileDuring"));
             await write(row,row.next,true);applied.push(row);pending.push(row);
             if(checkpoint&&row.next)writtenStats.set(row.relative,fileSignature(await freshStat(row.file)));
           });
@@ -571,7 +606,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
           }
           if(applied.length)await onBatch(applied.map(row=>({...row,next:row.previous})));
         }catch{incomplete=true;}
-        throw Error(error.message+(incomplete?'。部分文件在回滚时再次变化，请检查工作区和原 Git 提交。':''));
+        throw Error(error.message+(incomplete?tr("gitEngine.someFilesChangedAgainDuringRollbackCheck"):''));
       }
       if(checkpoint){
         for(const row of changes){
@@ -610,6 +645,52 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       }
     }
 
+    async hasCommit(oid) {
+      if(!oid||!OID.test(oid))return false;
+      try{await git.readCommit({...this.args,oid});return true;}
+      catch(error){if(error.code==='NotFoundError')return false;throw error;}
+    }
+
+    /** Collect objects reachable from `head` while pruning subtrees already present in `stop` commit(s). */
+    async objectsSince(head,stop) {
+      if(!head)return [];
+      if(!stop||head===stop)return head===stop?[]:this.objects(head);
+      if(!await this.hasCommit(stop))return this.objects(head);
+      const isAncestor=await git.isDescendent({...this.args,oid:head,ancestor:stop,depth:-1}).catch(()=>false);
+      if(!isAncestor)return this.objects(head);
+      const shallow=await this.shallow();
+      const stopCommit=await git.readCommit({...this.args,oid:stop});
+      const skip=new Set([stop,stopCommit.commit.tree]);
+      const seen=new Set(),queue=[head];
+      const skipTrees=[stopCommit.commit.tree];
+      while(skipTrees.length){
+        const treeOid=skipTrees.pop();
+        const {type,object}=/** @type {ParsedObject} */ (await git.readObject({...this.args,oid:treeOid,format:'parsed'}));
+        if(type!=='tree')continue;
+        for(const item of object){
+          if(!skip.has(item.oid)){
+            skip.add(item.oid);
+            if(item.type==='tree')skipTrees.push(item.oid);
+          }
+        }
+      }
+      while(queue.length){
+        const oid=queue.pop();
+        if(skip.has(oid)||seen.has(oid))continue;
+        if(!OID.test(oid)||seen.size>=120000)throw Error(tr("gitEngine.tooManyGitObjectsForASingle"));
+        seen.add(oid);
+        if(this.objectSizes.get(oid)?.type==='blob')continue;
+        const {type,object}=/** @type {ParsedObject} */ (await git.readObject({...this.args,oid,format:'parsed'}));
+        if(type==='commit')queue.push(object.tree,...(shallow.has(oid)?[]:object.parent));
+        if(type==='tree')for(const item of object)queue.push(item.oid);
+        if(type==='blob'){
+          if(object.length>FILE_LIMIT)throw Error(tr("gitEngine.theCommitHistoryContainsAnObjectLarger"));
+          this.rememberObject(oid,type,object.length);
+        }
+      }
+      return [...seen];
+    }
+
     async objects(head,stop=null) {
       if(!head)return [];
       if(!stop&&this.reachableCache?.head===head)return this.reachableCache.list;
@@ -618,14 +699,14 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
       while(queue.length) {
         const oid=queue.pop();
         if(oid===stop||seen.has(oid))continue;
-        if(!OID.test(oid)||seen.size>=30000)throw Error('Git 对象数量超过单次同步上限。');
+        if(!OID.test(oid)||seen.size>=120000)throw Error(tr("gitEngine.tooManyGitObjectsForASingle"));
         seen.add(oid);
         if(this.objectSizes.get(oid)?.type==='blob')continue;
         const {type,object}=/** @type {ParsedObject} */ (await git.readObject({...this.args,oid,format:'parsed'}));
         if(type==='commit')queue.push(object.tree,...(shallow.has(oid)?[]:object.parent));
         if(type==='tree')for(const item of object)queue.push(item.oid);
         if(type==='blob') {
-          if(object.length>FILE_LIMIT)throw Error('提交历史包含超过 50 MiB 的对象。');
+          if(object.length>FILE_LIMIT)throw Error(tr("gitEngine.theCommitHistoryContainsAnObjectLarger"));
           this.rememberObject(oid,type,object.length);
         }
       }
@@ -649,7 +730,7 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
 
     async binaryObject(oid) {
       const {type,object}=/** @type {RawObject} */ (await git.readObject({...this.args,oid,format:'content'}));
-      if(!objectTypes.includes(type)||object.length>FILE_LIMIT)throw Error('Git 对象类型无效或超过 50 MiB。');
+      if(!objectTypes.includes(type)||object.length>FILE_LIMIT)throw Error(tr("gitEngine.theGitObjectSTypeIsInvalid"));
       this.rememberObject(oid,type,object.length);
       return {oid,type,bytes:object};
     }
@@ -660,20 +741,20 @@ export function createGitEngine({fs,path,atomicWrite,within,caseInsensitive=fals
     }
 
     async acceptBinary({oid,type,bytes}) {
-      if(!OID.test(oid)||!objectTypes.includes(type)||!bytes||bytes.length>FILE_LIMIT)throw Error('Git 对象无效或超过大小上限。');
-      if(gitOid(type,bytes)!==oid)throw Error('Git 对象哈希校验失败。');
+      if(!OID.test(oid)||!objectTypes.includes(type)||!bytes||bytes.length>FILE_LIMIT)throw Error(tr("gitEngine.theGitObjectIsInvalidOrExceeds"));
+      if(gitOid(type,bytes)!==oid)throw Error(tr("gitEngine.gitObjectHashVerificationFailed"));
       await git.writeObject({...this.args,type,object:bytes,format:'content'});
       this.rememberObject(oid,type,bytes.length);
     }
   
     async accept(objects) {
       const unique=[...new Map(objects.map(item=>[item?.oid,item])).values()];
-      if(unique.length!==objects.length)throw Error('Git 对象批次含重复 ID。');
+      if(unique.length!==objects.length)throw Error(tr("gitEngine.theGitObjectBatchContainsDuplicateIds"));
       const width=sandboxed?6:1;
       for(let i=0;i<unique.length;i+=width)await settleGroup(unique.slice(i,i+width),async item=>{
-        if(!item||typeof item.data!=='string')throw Error('Git 对象无效。');
+        if(!item||typeof item.data!=='string')throw Error(tr("gitEngine.invalidGitObject"));
         const bytes=Buffer.from(item.data,'base64');
-        if(bytes.length>FILE_LIMIT||bytes.toString('base64')!==item.data)throw Error('Git 对象编码无效或超过大小上限。');
+        if(bytes.length>FILE_LIMIT||bytes.toString('base64')!==item.data)throw Error(tr("gitEngine.theGitObjectEncodingIsInvalidOr"));
         await this.acceptBinary({...item,bytes});
       });
     }

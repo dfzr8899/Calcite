@@ -1,3 +1,4 @@
+import {getLocale, knownDiagnostic, t as tr} from "./i18n/index.mjs";
 function privateV4(host) {
   const list=host.split('.');
   if(list.length!==4||list.some(part=>!/^\d{1,3}$/.test(part)||Number(part)>255))return false;
@@ -23,14 +24,14 @@ export function privateSyncHost(host,{proxy=false}={}) {
 
 export function syncUrl(value,{lan=false,testLoopback=false,request=false}={}) {
   let url;
-  try{url=new URL(value);}catch{throw Error('请输入有效的同步地址。');}
+  try{url=new URL(value);}catch{throw Error(tr("syncUrl.enterAValidSyncAddress"));}
   const hostname=url.hostname.replace(/^\[|\]$/g,'');
   const httpAllowed=lan?privateSyncHost(hostname,{proxy:true}):
     testLoopback&&['127.0.0.1','::1','localhost'].includes(hostname);
   if(url.username||url.password||url.hash||(!request&&url.search)||
       !(url.protocol==='https:'||url.protocol==='http:'&&httpAllowed)) {
-    throw Error(lan?'明文直连仅支持私有局域网、组网地址、回环或 .local；公网地址必须使用 HTTPS。':
-      '远程 Git 需要不含账号或令牌的 HTTPS 仓库 URL。');
+    throw Error(lan?tr("syncUrl.plainHttpIsLimitedToPrivateNetworks"):
+      tr("syncUrl.remoteGitRequiresAnHttpsUrlWithout"));
   }
   return url;
 }
@@ -41,21 +42,23 @@ export function lanFailure(address,error,status,detail) {
   const reason=[error?.code,error?.name,error?.message,error?.cause?.code].filter(Boolean).join(' ');
   let code='LAN_UNREACHABLE',summary;
   if(status===401) {
-    code='LAN_AUTH';summary='配对 Token 无效或已吊销，请重新配对。';
+    code='LAN_AUTH';summary=tr("syncUrl.thePairingTokenIsInvalidOrWas");
   }else if(status) {
-    code='LAN_HTTP';summary='请求失败（HTTP '+status+'）。'+(typeof detail==='string'?detail.slice(0,250):'');
+    const close=getLocale()==='zh-CN'?'）。':'). ';
+    const sep=getLocale()==='zh-CN'?' ':'';
+    code='LAN_HTTP';summary=`${tr("syncUrl.requestFailedHttp")}${sep}${status}${close}`+(typeof detail==='string'?detail.slice(0,250):'');
   }else if(/timed?\s*out|timeout|etimedout/i.test(reason)) {
-    code='LAN_TIMEOUT';summary='连接超时，请确认手机与电脑在同一网络，并检查桌面防火墙。';
+    code='LAN_TIMEOUT';summary=tr("syncUrl.connectionTimedOutCheckThatThePhone");
   }else if(/econnrefused|connection refused/i.test(reason)) {
-    code='LAN_REFUSED';summary='连接被拒绝，请确认桌面共享已启动、端口正确且防火墙已放行。';
+    code='LAN_REFUSED';summary=tr("syncUrl.connectionRefusedCheckThatDesktopSharingIs");
   }else {
-    summary='无法连接或跨网不可达，请检查手机与电脑是否在同一网段，以及桌面防火墙。';
-    if(error?.message&&/\p{Script=Han}/u.test(error.message))summary+=' '+error.message;
+    summary=tr("syncUrl.couldNotConnectToThePeerCheck");
+    if(error?.message&&(knownDiagnostic(error.message)||/\p{Script=Han}/u.test(error.message)))summary+=' '+error.message;
   }
-  return Object.assign(Error('局域网 '+endpoint+' · '+summary,{cause:error}),{code});
+  return Object.assign(Error(`${tr("syncUrl.lan")} `+endpoint+' · '+summary,{cause:error}),{code});
 }
 
 export function peerFailure(error) {
   const failures=error.errors||[error];
-  return failures.find(row=>row.code==='LAN_AUTH'||/不匹配/.test(row.message))||failures[0];
+  return failures.find(row=>row.code==='LAN_AUTH'||/不匹配|does not match/i.test(row.message))||failures[0];
 }

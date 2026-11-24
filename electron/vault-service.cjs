@@ -1,10 +1,11 @@
 const path=require('node:path');
+const {getLocale}=require('../shared/i18n/index.mjs');
 const {VaultIndex,readNote,digest}=require('./index-service.cjs');
 const {entry,tracked,watchVault}=require('./watcher.cjs');
 const {key,within,markdown}=require('./workspace.cjs');
 const {documentType}=require('./ipc-schema.cjs');
 
-function createVaultService({queue,publish,fail,onInternal=()=>{}}) {
+function createVaultService({queue,publish,fail,onInternal=()=>{},onAssetChange=()=>{}}) {
   let active;
 
   function expireWrites(state) {
@@ -21,7 +22,7 @@ function createVaultService({queue,publish,fail,onInternal=()=>{}}) {
     const controller=new AbortController();
     const state={root,controller,index:new VaultIndex(root,controller.signal),own:new Map(),rows:new Map()};
     active=state;
-    state.watcher=watchVault(root,changes=>queue(()=>deliver(state,changes)).catch(fail),fail);
+    state.watcher=watchVault(root,changes=>queue(()=>deliver(state,changes)).catch(fail),fail,()=>onAssetChange());
     state.ready=state.watcher.ready.then(()=>state.index.scan(row=>state.rows.set(key(row.path),row)));
     state.ready.catch(fail);
   }
@@ -127,9 +128,10 @@ function createVaultService({queue,publish,fail,onInternal=()=>{}}) {
       if (!folders.has(parent)) folders.set(parent,[]);
       folders.get(parent).push(row);
     }
+    const locale=getLocale();
     const children=(dir,depth=0)=>depth>12?[]:(folders.get(key(dir))||[])
       .map(row=>row.children?{...row,children:children(row.path,depth+1)}:row)
-      .sort((a,b)=>Number(!!b.children)-Number(!!a.children)||a.name.localeCompare(b.name,'zh-CN'));
+      .sort((a,b)=>Number(!!b.children)-Number(!!a.children)||a.name.localeCompare(b.name,locale));
     return children(state.root);
   }
 

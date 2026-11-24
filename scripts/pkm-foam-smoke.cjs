@@ -167,7 +167,7 @@ async function desktop(profile,vault){
     const dialog=page.locator('dialog[open]').last();
     await dialog.locator('[name=name]').fill('programming');
     await dialog.getByRole('button',{name:'确定',exact:true}).click();
-    await page.locator('#toast').getByText(/已自动更新/).waitFor();
+    await page.locator('#toast').getByRole('button',{name:'查看变更',exact:true}).waitFor();
     const renamed=await fs.readFile(path.join(vault,'A.md'),'utf8');
     assert.match(renamed,/\[\[programming\/模板#二号章节\|动态规划\]\]/);
     assert.match(renamed,/\[programming\/模板#二号章节\|动态规划\]:/);
@@ -231,7 +231,7 @@ async function android(){
     const move=page.locator('dialog.feature-dialog[open]').last();
     await move.getByLabel('目标文件夹').selectOption({label:'Archive'});
     await move.getByRole('button',{name:'移动',exact:true}).tap();
-    await page.locator('#toast').getByText(/已自动更新/).waitFor();
+    await page.locator('#toast').getByRole('button',{name:'查看变更',exact:true}).waitFor();
     const read=key=>page.evaluate(file=>{
       const entry=calciteTest.filesystem.store.get('DATA:CalciteVaults/PKM/'+file);
       return entry&&new TextDecoder().decode(Uint8Array.from(atob(entry.data),character=>character.charCodeAt(0)));
@@ -249,11 +249,21 @@ async function android(){
     const {blob}=await git.readBlob({fs:mirror,dir:'/PKM',oid,filepath:'dp/模板.md'});
     assert.match(Buffer.from(blob).toString('utf8'),/\[\[\.\.\/Archive\/A\]\]/);
     await tap('更多文档操作');
+    await sheet.getByRole('button',{name:'变更日志',exact:true}).tap();
+    const log=page.locator('.activity-view[open]');
+    await log.locator('summary').first().tap();
+    await log.getByRole('button',{name:'撤销',exact:true}).tap();
+    await page.waitForFunction(()=>document.querySelector('#toast')?.textContent.includes('已撤销，恢复到 A.md'));
+    assert.match(await read('A.md'),/\[相对链接\]\(\.\/dp\//);
+    assert.equal(await read('Archive/A.md'),undefined);
+    await log.getByRole('button',{name:'关闭变更日志'}).tap();
+    await log.waitFor({state:'hidden'});
+    await tap('更多文档操作');
     await sheet.getByRole('button',{name:'知识库体检',exact:true}).tap();
     await page.locator('[data-health=placeholders] strong').getByText(/Drafts\/待建/).waitFor();
     await page.locator('[data-health=broken]').getByText(/歧义链接/).waitFor();
     assert.deepEqual(errors,[]);
-    console.log('Android native bridge mock passed: reading embeds, touch preview, move refactor, and health view.');
+    console.log('Android native bridge mock passed: reading embeds, touch preview, audited move, undo, and health view.');
   }finally{await browser?.close();server.close();}
 }
 

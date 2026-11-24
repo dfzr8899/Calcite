@@ -1,3 +1,5 @@
+import {t as tr} from "../shared/i18n/index.mjs";
+import {mountLocalizedMarkup} from './localization.js';
 import {pastedURL,tableAtLine,tableStartLines} from './markdown-edit.js';
 import {compressPastedImage} from './attachments.js';
 
@@ -23,7 +25,7 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
   bar.id = 'document-find';
   bar.className = 'document-find';
   bar.hidden = true;
-  bar.innerHTML = '<input type="search" name="query" aria-label="查找" placeholder="查找"><span class="find-count" aria-live="polite"></span><button type="button" data-find="previous" title="上一处">↑</button><button type="submit" title="下一处">↓</button><input name="replacement" aria-label="替换为" placeholder="替换为"><button type="button" data-find="replace">替换</button><button type="button" data-find="all">全部替换</button><button type="button" data-find="close" aria-label="关闭查找">×</button>';
+  mountLocalizedMarkup(bar,()=>`<input type="search" name="query" aria-label="${tr("main.find")}" placeholder="${tr("main.find")}"><span class="find-count" aria-live="polite"></span><button type="button" data-find="previous" title="${tr("editorTools.previous")}">↑</button><button type="submit" title="${tr("editorTools.next")}">↓</button><input name="replacement" aria-label="${tr("editorTools.replaceWith")}" placeholder="${tr("editorTools.replaceWith")}"><button type="button" data-find="replace">${tr("editorTools.replace")}</button><button type="button" data-find="all">${tr("editorTools.replaceAll")}</button><button type="button" data-find="close" aria-label="${tr("editorTools.closeFind")}">×</button>`);
   section.insertBefore(bar,live);
   let ranges = [], selected = 0;
   let searchFrame, focusFrame, lastCaret;
@@ -93,10 +95,10 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
           }
           return false;
         });
-        if(operations.length!==ranges.length){toast('此处包含渲染后的内容，请在源码中修改。');return;}
-        const tr=view.state.tr;
-        (all?operations:[operations[selected]]).reverse().forEach(([from,to])=>tr.insertText(value,from,to));
-        const serialized=crepe.editor.action(ctx=>ctx.get(serializerCtx)(tr.doc));
+        if(operations.length!==ranges.length){toast(tr("editorTools.thisSectionContainsRenderedContentEditIt"));return;}
+        const transaction=view.state.tr;
+        (all?operations:[operations[selected]]).reverse().forEach(([from,to])=>transaction.insertText(value,from,to));
+        const serialized=crepe.editor.action(ctx=>ctx.get(serializerCtx)(transaction.doc));
         applyText(splitFrontmatter(text).prefix+serialized);
       }
     } else {
@@ -105,7 +107,7 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
         if (!view.dom.contains(range.startContainer) || !view.dom.contains(range.endContainer)) return [];
         return [[view.posAtDOM(range.startContainer,range.startOffset,1),view.posAtDOM(range.endContainer,range.endOffset,-1)]];
       });
-      if (!operations.length) { toast('请在源码模式编辑 YAML 属性。'); return; }
+      if (!operations.length) { toast(tr("editorTools.editYamlPropertiesInSource")); return; }
       const transaction=view.state.tr;
       operations.sort((a,b)=>b[0]-a[0]).forEach(([from,to])=>transaction.insertText(value,from,to));
       view.dispatch(transaction);
@@ -178,8 +180,8 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
   }
 
   async function upload(file, tab=active()) {
-    if (!tab) throw Error('请先打开或新建文档。');
-    if (!tab.path && !await save(tab)) throw Error('请先保存文档，再添加附件。');
+    if (!tab) throw Error(tr("editorTools.openOrCreateANoteFirst"));
+    if (!tab.path && !await save(tab)) throw Error(tr("editorTools.saveTheNoteBeforeAddingAttachments"));
     const options=settings();
     if(!file.type&&types[file.name.split('.').pop().toLowerCase()]){
       file=new File([file],file.name,{type:types[file.name.split('.').pop().toLowerCase()]});
@@ -213,7 +215,7 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
   }
   function assertInsertion(target) {
     if(!target.tab||active()!==target.tab||getMode()!==target.mode||target.view.state.doc!==target.doc)
-      throw Error('文档已切换或修改，请重新插入。');
+      throw Error(tr("editorTools.theNoteChangedInsertAgain"));
   }
   const imageLink=(file,url)=>'!['+file.name.replace(/[\[\]\r\n]/g,'')+']('+url+')';
   async function insertImage(file,target=insertionTarget()) {
@@ -280,7 +282,7 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
         markdown=[markdown,...links.slice(i)].filter(Boolean).join('\n\n');
       }
       if (!markdown) return;
-      if (active()!==tab || getMode()!==mode || view.state.doc!==state.doc) throw Error('文档已切换或修改，请重新粘贴或拖放。');
+      if (active()!==tab || getMode()!==mode || view.state.doc!==state.doc) throw Error(tr("editorTools.theNoteChangedPasteOrDropAgain"));
       insert(markdown,{mode,from,to});
     })().catch(fail);
   }
@@ -339,7 +341,7 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
     const text=isSource?state.sliceDoc(from,to):state.doc.textBetween(from,to,'\n');
     function applySelection() {
       if(active()!==tab||getMode()!==mode||view.state.doc!==state.doc)
-        throw Error('文档已切换或修改，请重新打开菜单。');
+        throw Error(tr("editorTools.theNoteChangedReopenTheMenu"));
       if(isSource)view.dispatch({selection:inSelection?state.selection:{anchor:from,head:to}});
       else view.dispatch(view.state.tr.setSelection(inSelection?selected:
         Selection.near(view.state.doc.resolve(from))));
@@ -370,7 +372,7 @@ export function installEditorTools({$,platform,crepe,liveView,source,active,getM
       link:line&&sourceLink(line.text,(pos??selected.head)-line.from),
       focus:applySelection, cut, paste, selectAll,
       insert(markdown) {applySelection();insert(markdown,range,true);},
-      format(open,close=open,placeholder='文本') {
+      format(open,close=open,placeholder=tr("editorTools.text")) {
         applySelection();
         const value=text||placeholder;
         insert(open+value+close,range);

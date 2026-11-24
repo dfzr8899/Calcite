@@ -1,3 +1,4 @@
+const {t:tr}=require("../shared/i18n/index.mjs");
 const path=require('node:path');
 const fs=require('node:fs/promises');
 const {imageExtension,markdownImages,localReference,outsideCode}=require('../shared/markdown-images.mjs');
@@ -66,9 +67,9 @@ async function orphanPictures(root,{index,drafts=[],verify=false}={}) {
     }
   }
   async function load(file,maximum) {
-    if(path.relative(await fs.realpath(file),file))throw Error('文件已移动，请重新扫描附件。');
+    if(path.relative(await fs.realpath(file),file))throw Error(tr("attachmentService.theFileMovedScanAttachmentsAgain"));
     const stat=await fs.lstat(file);
-    if(!stat.isFile()||stat.isSymbolicLink()||stat.size>maximum) throw Error('有文件无法完整扫描，未能安全判断孤立附件。');
+    if(!stat.isFile()||stat.isSymbolicLink()||stat.size>maximum) throw Error(tr("attachmentService.someFilesCouldNotBeScannedSo"));
     const cached=index?.notes.get(key(file));
     const text=!verify&&cached?.mtime===stat.mtimeMs&&cached.text!==null?cached.text:await fs.readFile(file,'utf8');
     return [text,selected.get(key(file))];
@@ -81,7 +82,7 @@ async function orphanPictures(root,{index,drafts=[],verify=false}={}) {
   for(const file of canvases) {
     const [text]=await load(file,5*1024*1024);
     let nodes;
-    try{nodes=JSON.parse(text).nodes;}catch{throw Error('有画布无法解析，未能安全判断孤立附件。');}
+    try{nodes=JSON.parse(text).nodes;}catch{throw Error(tr("attachmentService.aCanvasCouldNotBeParsedSo"));}
     if(!Array.isArray(nodes))continue;
     for(const node of nodes) {
       if(node?.type==='file'&&typeof node.file==='string')mark('/'+node.file.replace(/^\//,''),file,true);
@@ -117,7 +118,7 @@ async function portableMarkdown({note,text,root,readImage}) {
       const image=await readImage(file).catch(()=>null);
       if(!image)continue;
       size+=image.bytes.length;
-      if(size>96*1024*1024)throw Error('便携包超过 96 MiB，请分开导出。');
+      if(size>96*1024*1024)throw Error(tr("attachmentService.theBundleExceeds96MibExportIt"));
       name='assets/'+String(entries.size+1).padStart(3,'0')+'-'+path.basename(file).replace(/[<>:"|?*\x00-\x1f]/g,'_');
       handles.set(key(file),name);entries.set(name,image.bytes);break;
     }

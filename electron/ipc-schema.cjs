@@ -23,8 +23,9 @@ const json=(limit,validate)=>value=>{
 };
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
 const mode=oneOf('live','source','read');
+const fileSnapshot=optional(shape({mtimeMs:number,size:number,hash:value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value)}));
 const tab=shape({id:name,path:nullable(docPath),name,text:noteText,saved:noteText,mtime:nullable(number),pinned:optional(bool),
-  deleted:optional(bool),holdAutoSave:optional(bool),
+  deleted:optional(bool),holdAutoSave:optional(bool),snapshot:fileSnapshot,
   viewMode:optional(mode),scrollByMode:optional(shape({live:optional(number),source:optional(number),read:optional(number)}))});
 const draft=shape({path:docPath,text:noteText,saved:optional(noteText),mtime:optional(number)});
 const drafts=json(64*MiB,list(draft,512));
@@ -47,24 +48,27 @@ const upload=shape({note:notePath,strategy:oneOf('workspace','note'),directory:s
 const imageURL=value=>string(98304,1)(value)&&value.startsWith('note-image://local/');
 const exportData=(...formats)=>shape({html,format:oneOf(...formats),name});
 const board=json(MAX_CANVAS,shape({nodes:list(record,1200),edges:list(record,10000)}));
-const syncOptions=shape({enabled:bool,mode:oneOf('lan','remote'),auto:bool,listen:bool,
+const syncOptions=shape({enabled:bool,conflictStrategy:optional(oneOf('lww-history','conflict-copy')),mode:oneOf('lan','remote'),auto:bool,listen:bool,
   port:value=>Number.isInteger(value)&&value>=0&&value<=65535,remoteUrl:string(4096),remoteUser:string(128),branch:string(120,1),
   name:string(128,1),email:string(256,1),deviceName:string(240,1),peerUrl:string(4096),peerVaultId:string(36),
   wifiOnly:nullable(bool),peerName:optional(string(240)),endpoints:optional(list(string(4096),12)),
   pat:optional(string(2048)),peerToken:optional(string(64)),pairing:optional(string(8192))});
 
 const validators={
+  'window:language':[oneOf('auto','zh-CN','en-US')],
   'window:set-appearance':[shape({theme:oneOf('system','dark','light'),glass:oneOf('liquid','mica','solid'),reduceTransparency:bool})],
   'window-control':[oneOf('minimize','maximize','close')],
   'renderer-ready':[], bootstrap:[], tree:[], discard:[], quit:[], 'canvas-files':[],
   folder:[optional(list(docPath,512))], 'close-vault':[optional(list(docPath,512))], open:[optional(docPath)], 'release-file':[docPath],
   'recent-vaults':[], 'switch-vault':[filePath,optional(list(docPath,512))],
-  read:[docPath], save:[shape({path:nullable(docPath),text:noteText,saved:optional(noteText),mtime:nullable(number),
+  read:[docPath,optional(bool)], save:[shape({path:nullable(docPath),text:noteText,saved:optional(noteText),mtime:nullable(number),
+    snapshot:fileSnapshot,resolution:optional(oneOf('reload','overwrite')),
     saveAs:optional(bool),name:optional(name)})],
   session:[session], search:[string(4096)], external:[string(8192,1)], reveal:[filePath,optional(bool)], 'reveal-image':[filePath],
   'clipboard-write-text':[noteText], 'clipboard-paste':[bool], pdf:[html,optional(pdfOptions)],
   'workspace-edit':[value=>edit(value)&&(['note','folder'].includes(value.type)?!!value.parent&&!!value.name:
     !!value.path&&(value.type!=='move'||!!value.parent)&&(value.type!=='rename'||!!value.name))],
+  'activity:list':[], 'activity:empty':[], 'activity:undo':[string(36,36),optional(string(64,64))],
   'note-target':[shape({source:nullable(docPath),destination:string(32768),wiki:bool})],
   'workspace-links':[shape({source:nullable(docPath),destinations:list(string(32768),256),headings:optional(bool)})],
   'workspace-health':[optional(drafts)],

@@ -354,6 +354,22 @@ footer button[aria-pressed="true"] { color: var(--heading); }
   border-left: 2px solid var(--accent); color: var(--text); opacity: 0; pointer-events: none;
 }
 #toast.show { opacity: 1; }
+#toast.show.has-actions { pointer-events:auto;display:flex;align-items:center;flex-wrap:wrap;gap:6px; }
+#toast button { border:1px solid var(--separator);border-radius:8px;padding:4px 8px; }
+.activity-view { width:min(680px,calc(100vw - 20px)); padding:16px; max-height:85dvh; overflow:auto; }
+.activity-view > header,.activity-view > nav,.activity-entry summary { display:flex;gap:8px;align-items:center;flex-wrap:wrap; }
+.activity-view > header,.activity-entry summary { justify-content:space-between; }
+.activity-view > nav { margin:8px 0 12px; }
+.activity-view > nav [aria-pressed=true] { color:var(--accent); }
+.activity-view > footer { position:static;display:block;padding:0; }
+.activity-view .activity-entry { margin-block:8px;padding:8px 12px; }
+.activity-entry summary { cursor:pointer; }
+.activity-entry summary > span { flex-basis:100%;overflow-wrap:anywhere; }
+.activity-entry time,.activity-entry small { color:var(--muted); }
+.activity-entry-body :is(ul,p) { margin-block:8px;overflow-wrap:anywhere; }
+.activity-entry-body li > small { display:block; }
+.activity-entry-body li > button { text-align:start;white-space:normal;overflow-wrap:anywhere; }
+.activity-confirm-files { max-height:28vh;overflow:auto;overflow-wrap:anywhere; }
 .floating-menu { inset:auto; z-index:90; -webkit-app-region:no-drag; width:max-content; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); padding:5px; overflow:auto; }
 .floating-menu-child { z-index:91; }
 #more-menu { min-width:230px; overflow:hidden; }

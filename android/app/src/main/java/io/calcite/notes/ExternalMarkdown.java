@@ -12,23 +12,30 @@ import java.util.regex.Pattern;
 
 final class ExternalMarkdown {
     static final int MAX_BYTES = 10 * 1024 * 1024;
-    static final String DEFAULT_NAME = "未命名文档.md";
+    static final String DEFAULT_NAME = "Untitled Document.md";
     private static final Pattern DEVICE_NAME =
         Pattern.compile("(?i)^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\\.|$)");
 
     private ExternalMarkdown() {}
 
     static final class InvalidDocument extends IOException {
-        InvalidDocument(String message) { super(message); }
+        final int messageId;
+        InvalidDocument(int messageId) {
+            this.messageId = messageId;
+        }
     }
 
     static String cleanName(String raw) {
-        if (raw == null) return DEFAULT_NAME;
+        return cleanName(raw, DEFAULT_NAME);
+    }
+
+    static String cleanName(String raw, String fallback) {
+        if (raw == null) return fallback;
         String path = raw.replace('\\', '/');
         String name = Normalizer.normalize(path.substring(path.lastIndexOf('/') + 1), Normalizer.Form.NFC)
             .replaceAll("[<>:\"|?*\\p{Cntrl}\\p{Cf}]", "_")
             .replaceAll("^[.\\s]+|[.\\s]+$", "");
-        if (name.isEmpty()) return DEFAULT_NAME;
+        if (name.isEmpty()) return fallback;
         if (DEVICE_NAME.matcher(name).find()) name = "_" + name;
         if (name.length() <= 100) return name;
         int dot = name.lastIndexOf('.');
@@ -39,13 +46,13 @@ final class ExternalMarkdown {
     }
 
     static String readText(InputStream input) throws IOException {
-        if (input == null) throw new InvalidDocument("无法读取外部文件。");
+        if (input == null) throw new InvalidDocument(R.string.external_read);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         int count;
         while ((count = input.read(buffer)) != -1) {
-            if (Thread.currentThread().isInterrupted()) throw new IOException("读取已取消。");
-            if (count > MAX_BYTES - bytes.size()) throw new InvalidDocument("外部文件超过 10 MiB。");
+            if (Thread.currentThread().isInterrupted()) throw new IOException("Read interrupted.");
+            if (count > MAX_BYTES - bytes.size()) throw new InvalidDocument(R.string.external_limit);
             bytes.write(buffer, 0, count);
         }
         String text;
@@ -55,14 +62,14 @@ final class ExternalMarkdown {
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(bytes.toByteArray())).toString();
         } catch (CharacterCodingException error) {
-            throw new InvalidDocument("外部文件不是有效的 UTF-8 文本，无法预览。");
+            throw new InvalidDocument(R.string.external_utf8);
         }
         if (text.startsWith("\uFEFF")) text = text.substring(1);
         if (text.codePoints().anyMatch(point -> Character.isISOControl(point)
                 && point != '\t' && point != '\n' && point != '\r' && point != '\f')) {
-            throw new InvalidDocument("外部文件包含二进制内容，无法预览。");
+            throw new InvalidDocument(R.string.external_binary);
         }
-        if (text.codePoints().allMatch(Character::isWhitespace)) throw new InvalidDocument("外部文件为空。");
+        if (text.codePoints().allMatch(Character::isWhitespace)) throw new InvalidDocument(R.string.external_empty);
         return text;
     }
 }

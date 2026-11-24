@@ -171,7 +171,7 @@ const root = path.resolve(__dirname,'..');
     await file('新建笔记.md').waitFor();
     await fs.stat(path.join(vault,'新建笔记.md'));
     await file('新建笔记.md').click({button:'right'});
-    await page.locator('#file-menu').getByRole('menuitem',{name:'移入系统回收站'}).click();
+    await page.locator('#file-menu').getByRole('menuitem',{name:'移入本地回收站'}).click();
     await page.locator('dialog[open]').getByRole('button',{name:'移入回收站'}).click();
     await file('新建笔记.md').waitFor({state:'detached'});
     await assert.rejects(fs.stat(path.join(vault,'新建笔记.md')),{code:'ENOENT'});

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {win32 as path} from 'node:path';
 import {test} from 'node:test';
 import {VaultIndex} from '../../shared/core/vault-index.mjs';
-import {planLinkRefactor} from '../../shared/core/link-refactor.mjs';
+import {planLinkRefactor,planCanvasLinkRefactor,rewriteCanvasLinks} from '../../shared/core/link-refactor.mjs';
 import {withinNativePath} from '../../shared/core/vault-paths.mjs';
 
 const root='D:\\Vault';
@@ -54,7 +54,7 @@ test('rename rewrites wiki aliases, section embeds and relative links while pres
   assert(updated.includes('[入口](./%E5%BD%92%E6%A1%A3/%E6%96%B0%20%E6%A8%A1%E6%9D%BF%28%29%25%23%5B%E6%A0%A1%E9%AA%8C%5D.md#小节)'));
   assert(updated.includes(protectedText));
   assert(updated.includes('example: "[[专题/旧 版%23]]"'));
-  assert(!updated.includes('\r'));
+  assert.equal(updated.match(/\r\n/g)?.length,original.match(/\r\n/g)?.length);
   assert.deepEqual(reads,[source,old]);
 });
 
@@ -76,4 +76,41 @@ test('index invalidates one changed note and updates reverse links when a target
   await index.refresh();
   assert.deepEqual(reads,[right,origin]);
   assert.deepEqual(index.graph([]).edges,[{from:origin,to:left}]);
+});
+
+test('planCanvasLinkRefactor rewrites canvas file cards for rename, move, and folder moves while skipping invalid JSON',async()=>{
+  const note=file('Original.md'),renamed=file('Archive\\Renamed.md');
+  const board=file('Board.canvas'),broken=file('Broken.canvas'),untouched=file('Other.canvas');
+  const boardText=JSON.stringify({
+    nodes:[
+      {id:'n1',type:'file',file:'Original.md',x:0,y:0,width:240,height:120},
+      {id:'n2',type:'text',text:'Original.md',x:260,y:0,width:240,height:120},
+      {id:'n3',type:'file',file:'../Outside.md',x:520,y:0,width:240,height:120}
+    ],
+    edges:[]
+  },null,2)+'\n';
+  const otherText=JSON.stringify({nodes:[{id:'o1',type:'file',file:'Unrelated.md'}],edges:[]},null,2)+'\n';
+  const files=new Map([[note,'# Original'],[board,boardText],[broken,'{invalid'],[untouched,otherText]]);
+  const {index}=memoryVault(new Map([[note,'# Original']]));
+  await index.refresh();
+  const {move}=await planLinkRefactor(index,note,renamed,[],async name=>({text:files.get(name),mtime:1}));
+  const {changes,refactor}=await planCanvasLinkRefactor(index,move,[board,broken,untouched],[],
+    async name=>({text:files.get(name),mtime:1}));
+  assert.deepEqual(refactor,{notes:1,references:1});
+  assert.equal(changes.length,1);
+  assert.equal(changes[0].from,board);
+  assert.equal(changes[0].path,board);
+  assert.equal(changes[0].count,1);
+  assert.equal(changes[0].previous,boardText);
+  const parsed=JSON.parse(changes[0].saved);
+  assert.equal(parsed.nodes[0].file,'Archive/Renamed.md');
+  assert.equal(parsed.nodes[1].text,'Original.md');
+  assert.equal(parsed.nodes[2].file,'../Outside.md');
+
+  // Preserve UTF-8 BOM and CRLF if present on disk
+  const bomText='\uFEFF'+boardText.replaceAll('\n','\r\n');
+  const bomResult=rewriteCanvasLinks(bomText,root,move,path,(p,c)=>withinNativePath(path,p,c));
+  assert(bomResult.text.startsWith('\uFEFF'));
+  assert(bomResult.text.includes('\r\n'));
+  assert.equal(JSON.parse(bomResult.text.slice(1)).nodes[0].file,'Archive/Renamed.md');
 });

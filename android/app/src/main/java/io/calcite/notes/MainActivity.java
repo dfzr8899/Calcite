@@ -19,6 +19,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(CalciteDocumentPrint.class);
         // BridgeActivity forwards the launch Intent after loading the plugins.
         registerPlugin(CalciteExternalFiles.class);
+        registerPlugin(CalciteAtomicFiles.class);
+        registerPlugin(CalciteSystemBars.class);
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         View decor = getWindow().getDecorView();

@@ -1,56 +1,69 @@
+import {getLocale, t as tr} from "../shared/i18n/index.mjs";
+import {mountLocalizedMarkup, onLocaleChange} from './localization.js';
 import {activeMobileDialog,showDialog} from './mobile-ui.js';
 
-const syntax=[
-  ['heading','# 标题'],['bold','**粗体**'],['todo','- [ ] 待办'],['wiki','[[双链]]'],
-  ['math','$公式$'],['code','\u0060代码\u0060'],['table','表格'],['indent','缩进'],['outdent','反缩进'],
-  ['undo','撤销'],['redo','重做'],['paste','粘贴'],['image','插入图片'],['dismiss','收起键盘']
+const syntax=()=>[
+  ['heading',tr("mobileShell.heading")],['bold',tr("mobileShell.bold")],['todo',tr("mobileShell.task")],['wiki',tr("mobileShell.wikiLink")],
+  ['math',tr("mobileShell.math")],['code',tr("mobileShell.code")],['table',tr("main.table")],['indent',tr("mobileShell.indent")],['outdent',tr("mobileShell.outdent")],
+  ['undo',tr("main.undo")],['redo',tr("main.redo")],['paste',tr("main.paste")],['image',tr("mobileShell.insertImage")],['dismiss',tr("mobileShell.hideKeyboard")]
 ];
 
 export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,mode,editMode,activate,keyboard,changed,hint,fail}) {
   const selector=document.querySelector.bind(document);
   const root=document.documentElement,media=matchMedia('(max-width: 768px)');
   const nav=document.createElement('nav');
-  nav.className='mobile-nav';nav.setAttribute('aria-label','手机端导航');
-  nav.innerHTML=
-    '<button type="button" data-mobile-drawer="left" aria-controls="left-sidebar" aria-expanded="false" aria-label="打开文件抽屉">'+icon('panel-left')+'</button>'+
-    '<div class="mobile-document"><button type="button" class="mobile-title" aria-label="打开与最近笔记" aria-haspopup="dialog"></button>'+
-    '<button type="button" data-mobile-sync aria-haspopup="dialog" aria-label="打开同步状态"><span class="mobile-sync-dot"></span><small>仅本地</small></button></div>'+
+  nav.className='mobile-nav';nav.setAttribute('aria-label',tr("mobileShell.mobileNavigation"));
+  mountLocalizedMarkup(nav,()=>
+    `<button type="button" data-mobile-drawer="left" aria-controls="left-sidebar" aria-expanded="false" aria-label="${tr("mobileShell.openFileDrawer")}">`+icon('panel-left')+'</button>'+
+    `<div class="mobile-document"><button type="button" class="mobile-title" aria-label="${tr("mobileShell.openAndRecentNotes")}" aria-haspopup="dialog"></button>`+
+    `<button type="button" data-mobile-sync aria-haspopup="dialog" aria-label="${tr("mobileShell.openSyncStatus")}"><span class="mobile-sync-dot"></span><small>${tr("mobileShell.localOnly")}</small></button></div>`+
     '<div class="mobile-document-actions"><button type="button" data-mobile-mode></button>'+
-    '<button type="button" data-mobile-more aria-haspopup="dialog" aria-label="更多文档操作">'+icon('ellipsis')+'</button></div>';
+    `<button type="button" data-mobile-more aria-haspopup="dialog" aria-label="${tr("main.moreNoteActions")}">`+icon('ellipsis')+'</button></div>');
   const sidebar=selector('.sidebar');
   const sideTop=document.createElement('div');
   sideTop.className='mobile-side-top';
-  sideTop.innerHTML=
+  mountLocalizedMarkup(sideTop,()=>
     '<div class="mobile-side-header"><button type="button" class="mobile-vault-trigger" data-action="folder"'+
     (native?' aria-haspopup="dialog"':'')+'><span class="mobile-sync-dot"></span><strong></strong>'+icon('chevron-down')+'</button>'+
-    '<button type="button" data-action="settings" aria-label="设置中心">'+icon('settings')+'</button></div>'+
-    '<nav class="mobile-side-tabs" aria-label="知识库导航">'+
-    [['files','文件','folder-closed'],['search','搜索','search'],['tags','标签','tags'],['graph','图谱','network']]
+    `<button type="button" data-action="settings" aria-label="${tr("main.settings")}">`+icon('settings')+'</button></div>'+
+    `<nav class="mobile-side-tabs" aria-label="${tr("mobileShell.vaultNavigation")}">`+
+    [['files',tr("main.files"),'folder-closed'],['search',tr("mobileShell.search"),'search'],['tags',tr("mobileShell.tags"),'tags'],['graph',tr("mobileShell.graph"),'network']]
       .map(([id,label,glyph])=>'<button type="button" '+(id==='graph'?'data-mobile-graph aria-haspopup="dialog"':'data-pane="'+id+'"')+
-        '>'+icon(glyph)+'<span>'+label+'</span></button>').join('')+'</nav>';
+        '>'+icon(glyph)+'<span>'+label+'</span></button>') .join('')+'</nav>');
   const fileActions=document.createElement('div');
   fileActions.className='mobile-file-actions';
-  fileActions.innerHTML='<button type="button" class="mobile-primary" data-action="mobile-new-note">'+icon('plus')+'新建笔记</button>'+
-    '<button type="button" data-action="mobile-new-folder" aria-label="新建文件夹" title="新建文件夹">'+icon('folder-plus')+'</button>';
+  mountLocalizedMarkup(fileActions,()=>'<button type="button" class="mobile-primary" data-action="mobile-new-note">'+icon('plus')+`${tr("main.newNote2")}</button>`+
+    `<button type="button" data-action="mobile-new-folder" aria-label="${tr("main.newFolder")}" title="${tr("main.newFolder")}">`+icon('folder-plus')+'</button>');
   const drawers=document.createElement('div');
   drawers.id='mobile-drawers';drawers.hidden=true;
   const overlay=document.createElement('button');
-  overlay.type='button';overlay.className='mobile-shade';overlay.setAttribute('aria-label','关闭抽屉');
+  overlay.type='button';overlay.className='mobile-shade';overlay.setAttribute('aria-label',tr("mobileShell.closeDrawer"));
   drawers.append(overlay);
   const positions=['.sidebar','.outline-panel'].map(name=>{
     const node=selector(name),anchor=document.createComment(name);
     node.before(anchor);
     return {node,anchor};
   });
+  const inspector=positions[1].node;
+  const inspectorToggle=inspector.querySelector('[data-desktop-inspector-toggle]');
+  const inspectorClose=document.createElement('button');
+  inspectorClose.type='button';
+  inspectorClose.className='mobile-inspector-close';
+  inspectorClose.setAttribute('aria-label',tr('mobileShell.closeInspector'));
+  inspectorClose.innerHTML=icon('x');
+  inspectorClose.onclick=closeDrawer;
+  const inspectorHandle=document.createElement('div');
+  inspectorHandle.className='mobile-inspector-handle';
+  inspectorHandle.setAttribute('aria-hidden','true');
   const sheet=document.createElement('dialog');
   sheet.className='feature-dialog mobile-sheet';
   sheet.setAttribute('aria-labelledby','mobile-sheet-title');
   const toolbar=document.createElement('div');
   toolbar.className='mobile-keyboard';toolbar.hidden=true;
-  toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label','Markdown 快捷键');
-  toolbar.innerHTML=syntax.map(([id,label])=>'<button type="button" data-key="'+id+'">'+label+'</button>').join('');
+  toolbar.setAttribute('role','toolbar');toolbar.setAttribute('aria-label',tr("mobileShell.markdownShortcuts"));
+  mountLocalizedMarkup(toolbar,()=>syntax().map(([id,label])=>'<button type="button" data-key="'+id+'">'+label+'</button>').join(''));
   document.body.append(drawers,sheet,toolbar);
-  let enabled=false,drawer='',gesture,longPress,suppressed,peak=innerHeight;
+  let enabled=false,drawer='',gesture,longPress,suppressed,inspectorDrag,peak=innerHeight;
   let updateSyncCard,returnPage;
   const pages=[];
   const state=()=>Boolean(enabled);
@@ -62,9 +75,16 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
     sideTop.querySelector('[data-mobile-graph]').disabled=!available;
     const toggle=nav.querySelector('[data-mobile-mode]');
     toggle.disabled=!active();
-    toggle.textContent=mode()==='read'?'编辑':'阅读';
-    toggle.setAttribute('aria-label',mode()==='read'?'切换到编辑':'切换到阅读');
+    toggle.textContent=mode()==='read'?tr("main.edit"):tr("main.read");
+    toggle.setAttribute('aria-label',mode()==='read'?tr("mobileShell.switchToEdit"):tr("mobileShell.switchToRead"));
   }
+  onLocaleChange(()=>{
+    nav.setAttribute('aria-label',tr('mobileShell.mobileNavigation'));
+    overlay.setAttribute('aria-label',tr('mobileShell.closeDrawer'));
+    inspectorClose.setAttribute('aria-label',tr('mobileShell.closeInspector'));
+    toolbar.setAttribute('aria-label',tr('mobileShell.markdownShortcuts'));
+    update();
+  });
   function viewport() {
     const vv=window.visualViewport;
     const editing=!!document.activeElement?.closest('#source-editor,#live-editor');
@@ -82,7 +102,7 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
       nav.querySelector('[data-mobile-drawer]').setAttribute('aria-expanded','false');
       if(drawers.contains(document.activeElement))nav.querySelector('[data-mobile-drawer]').focus({preventScroll:true});
     }
-    drawer='';delete drawers.dataset.open;
+    drawer='';inspectorDrag=undefined;delete drawers.dataset.open;
     overlay.inert=true;
     positions.forEach(({node})=>{node.inert=enabled;});
   }
@@ -105,10 +125,14 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
       selector('.titlebar').append(nav);
       sidebar.prepend(sideTop);
       sidebar.append(fileActions);
+      inspector.prepend(inspectorHandle);
+      inspectorToggle.replaceWith(inspectorClose);
       glyphs();
     }else{
       delete root.dataset.platform;
       nav.remove();sideTop.remove();fileActions.remove();
+      inspectorHandle.remove();
+      inspectorClose.replaceWith(inspectorToggle);
     }
     drawers.hidden=!next;
     for(const {node,anchor} of positions) {
@@ -124,8 +148,8 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
     updateSyncCard=undefined;
     returnPage=back;
     sheet.dataset.kind=kind;
-    sheet.innerHTML='<header><button type="button" data-sheet-back aria-label="返回"'+(back?'':' hidden')+'>'+icon('chevron-left')+'<span>返回</span></button>'+
-      '<h2 id="mobile-sheet-title"></h2><button type="button" data-sheet-close aria-label="关闭操作表单">'+icon('x')+'</button></header><div class="mobile-sheet-content"></div>';
+    sheet.innerHTML=`<header><button type="button" data-sheet-back aria-label="${tr("mobileShell.back")}"`+(back?'':' hidden')+'>'+icon('chevron-left')+`<span>${tr("mobileShell.back")}</span></button>`+
+      `<h2 id="mobile-sheet-title"></h2><button type="button" data-sheet-close aria-label="${tr("mobileShell.closeActions")}">`+icon('x')+'</button></header><div class="mobile-sheet-content"></div>';
     sheet.querySelector('h2').textContent=label;
     sheet.querySelector('[data-sheet-close]').onclick=()=>sheet.close();
     sheet.querySelector('[data-sheet-back]').onclick=back;
@@ -179,12 +203,12 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
   }
   function showSync(value,{runSync,settings,conflicts}) {
     let running=false;
-    panel('同步状态','sync',(content,close)=>{
+    panel(tr("main.syncStatus"),'sync',(content,close)=>{
       content.innerHTML='<p class="mobile-sync-summary" role="status"></p><dl>'+
-        '<div><dt>最后同步</dt><dd data-last-sync></dd></div><div><dt>待同步版本</dt><dd data-pending></dd></div></dl>'+
-        '<progress aria-label="同步进度" hidden></progress><p class="mobile-sync-feedback" role="alert" hidden></p><div class="mobile-card-actions">'+
-        '<button type="button" class="mobile-primary">立即同步</button><button type="button" data-sync-settings>同步设置</button>'+
-        '</div><button type="button" data-mobile-conflicts hidden>查看同步冲突</button>';
+        `<div><dt>${tr("mobileShell.lastSync")}</dt><dd data-last-sync></dd></div><div><dt>${tr("mobileShell.pendingCommits")}</dt><dd data-pending></dd></div></dl>`+
+        `<progress aria-label="${tr("main.syncProgress")}" hidden></progress><p class="mobile-sync-feedback" role="alert" hidden></p><div class="mobile-card-actions">`+
+        `<button type="button" class="mobile-primary">${tr("main.syncNow")}</button><button type="button" data-sync-settings>${tr("main.syncSettings")}</button>`+
+        `</div><button type="button" data-mobile-conflicts hidden>${tr("main.viewSyncConflicts")}</button>`;
       const button=content.querySelector('.mobile-primary');
       const feedback=content.querySelector('.mobile-sync-feedback');
       const conflictButton=content.querySelector('[data-mobile-conflicts]');
@@ -192,7 +216,7 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
         value=next;
         content.querySelector('[role="status"]').textContent=next.detail||next.label;
         content.querySelector('[data-last-sync]').textContent=next.lastSyncedAt?
-          new Date(next.lastSyncedAt).toLocaleString():'暂无记录';
+          new Date(next.lastSyncedAt).toLocaleString(getLocale()):tr("mobileShell.noRecordsYet");
         content.querySelector('[data-pending]').textContent=next.connected?String(next.pendingCount??0):'0';
         const meter=content.querySelector('progress');
         meter.hidden=next.status!=='working';
@@ -219,8 +243,8 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
   }
   function showRecent() {
     const list=tabs().slice().reverse();
-    show('打开与最近笔记',[{items:[
-      {label:'新建笔记',run:()=>run('new')},
+    show(tr("mobileShell.openAndRecentNotes"),[{items:[
+      {label:tr("main.newNote2"),run:()=>run('new')},
       ...list.map(tab=>({label:tab.name,run:()=>activate(tab.id)}))
     ]}]);
     const rows=[...sheet.querySelectorAll('.mobile-sheet-content button')].slice(1);
@@ -308,6 +332,19 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
   sideTop.querySelector('[data-mobile-graph]').onclick=()=>{
     Promise.resolve(run('graph')).catch(fail);
   };
+  inspectorHandle.addEventListener('pointerdown',event=>{
+    if(drawer!=='right'||!event.isPrimary||event.button!==0)return;
+    inspectorDrag={id:event.pointerId,x:event.clientX,y:event.clientY};
+    inspectorHandle.setPointerCapture(event.pointerId);
+  });
+  inspectorHandle.addEventListener('pointerup',event=>{
+    if(inspectorDrag?.id!==event.pointerId)return;
+    const down=event.clientY-inspectorDrag.y;
+    const across=Math.abs(event.clientX-inspectorDrag.x);
+    if(down>44&&down>across)closeDrawer();
+    else inspectorDrag=undefined;
+  });
+  inspectorHandle.addEventListener('lostpointercapture',()=>{inspectorDrag=undefined;});
   overlay.onclick=closeDrawer;
   sheet.addEventListener('click',event=>{if(event.target===sheet)sheet.close();});
   sheet.addEventListener('cancel',event=>{
@@ -334,7 +371,7 @@ export function createMobileShell({native,icon,glyphs,run,tabs,active,workspace,
     for(const dot of [button.querySelector('span'),sideTop.querySelector('.mobile-sync-dot')])dot.dataset.state=value.status;
     button.querySelector('small').textContent=value.label;
     button.title=value.label;
-    button.setAttribute('aria-label','打开同步状态');
+    button.setAttribute('aria-label',tr("mobileShell.openSyncStatus"));
     const activeStatus=sheet.querySelector('[data-current] [data-vault-status]');
     if(activeStatus)activeStatus.textContent=value.summaryLabel;
     updateSyncCard?.(value);

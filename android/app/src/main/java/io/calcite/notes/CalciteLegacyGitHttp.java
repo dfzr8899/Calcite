@@ -34,7 +34,7 @@ public class CalciteLegacyGitHttp extends Plugin {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O || !"https".equals(url.getProtocol())
                     || url.getUserInfo() != null || url.getRef() != null || !"POST".equals(call.getString("method"))
                     || data == null || data.length() > ((MAX_BYTES + 2L) / 3) * 4) {
-                call.reject("Git 请求参数无效。");
+                call.reject(CalciteLanguage.text(getContext(), R.string.legacy_git_invalid));
                 return;
             }
             connection = (HttpsURLConnection) url.openConnection();
@@ -73,7 +73,7 @@ public class CalciteLegacyGitHttp extends Plugin {
             call.resolve(new JSObject().put("status", status).put("url", url.toString())
                     .put("headers", resultHeaders).put("data", payload));
         } catch (Exception error) {
-            call.reject("旧版 Android 的 Git 请求失败，请检查网络或仓库地址。");
+            call.reject(CalciteLanguage.text(getContext(), R.string.legacy_git_failed));
         } finally {
             if (connection != null) connection.disconnect();
         }

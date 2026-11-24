@@ -1,5 +1,11 @@
-const conflictName=/^(.*) \(同步冲突 \d{4}-\d\d-\d\d \d{4}(?: \d+)?\)(\.[^/]+)?$/;
+import {t as tr} from "../i18n/index.mjs";
+const conflictName=/^(.*) \((?:同步冲突|conflict) \d{4}-\d\d-\d\d \d{4}(?: \d+)?\)(\.[^/]+)?$/;
 const missing=error=>error.code==='ENOENT'||error.code==='ENOTDIR';
+
+export function conflictCopyName(relative,extension,stamp,serial=0) {
+  return relative.slice(0,relative.length-extension.length)+
+    ` (conflict ${stamp}${serial?' '+serial:''})`+extension;
+}
 
 /** @import {ConflictItem} from './types.mjs' */
 /** @param {ConflictItem[]} previous @param {ConflictItem[]} incoming */
@@ -34,11 +40,11 @@ export async function readConflictFile(engine,file,io) {
     const target=await engine.workspaceFile(file);
     try{
       const stat=await io.stat(target);
-      if(!stat.isFile()||stat.size>50*1024*1024)throw Error('文件类型无效或超过 50 MiB。');
+      if(!stat.isFile()||stat.size>50*1024*1024)throw Error(tr("syncConflicts.invalidFileTypeOrFileLargerThan"));
       const bytes=await io.readFile(target);
       let text;
-      try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw Error('此冲突包含二进制文件，无法显示文本差异。');}
-      if(text.includes('\0'))throw Error('此冲突包含二进制文件，无法显示文本差异。');
+      try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{throw Error(tr("syncConflicts.thisConflictContainsABinaryFileA"));}
+      if(text.includes('\0'))throw Error(tr("syncConflicts.thisConflictContainsABinaryFileA"));
       return {text,mtime:stat.mtimeMs};
     }catch(error){if(!missing(error))throw error;return {text:'',missing:true};}
 }
@@ -61,7 +67,7 @@ export async function resolveConflict(engine,row,choice,hooks) {
   const rows=[];
   if(choice==='apply') {
     const next=copy?await read(copy):null;
-    if(copy&&!next)throw Error('冲突副本已移动，请刷新冲突列表。');
+    if(copy&&!next)throw Error(tr("syncConflicts.theConflictCopyMovedRefreshTheList"));
     const previous=await read(file);
     if(previous||next)rows.push({file,next,previous});
   }

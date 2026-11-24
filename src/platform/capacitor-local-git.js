@@ -1,3 +1,4 @@
+import {t as tr,message,renderMessage,translateDiagnostic} from "../../shared/i18n/index.mjs";
 import git from 'isomorphic-git';
 import {Buffer} from 'buffer';
 import {randomId} from '../random-id.js';
@@ -16,7 +17,7 @@ import {within} from './capacitor-index.js';
 
 const paths={resolve:posixPath,join:posixPath,dirname,sep:'/',relative:(root,file)=>root===file?'':file.slice(root==='/'?1:root.length+1),
   extname(file){const name=basename(file),dot=name.lastIndexOf('.');return dot>0?name.slice(dot):'';}};
-const mobileDefaults={...defaults,enabled:true,deviceName:'Calcite 手机'};
+const mobileDefaults=()=>({...defaults,enabled:true,deviceName:tr('sync.mobileDefaultDevice')});
 function restoreConflicts(rows,dir) {
   if(!Array.isArray(rows))return [];
   const relocate=value=>{
@@ -42,22 +43,22 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
   const remoteTransfers=new Set();
 
   function view(s=state) {
-    if(!s)return {settings:{...mobileDefaults},status:'off',logs:[],conflicts:[],pendingCount:0,canEncrypt:true};
+    if(!s)return {settings:mobileDefaults(),status:'off',logs:[],conflicts:[],pendingCount:0,canEncrypt:true};
     const {settings,status,logs,conflicts,pendingCount,secrets}=s;
-    return {settings:{...settings},status,progress:s.progress,logs:[...logs],conflicts:[...conflicts],pendingCount,
+    return {settings:{...settings},status,progress:s.progress,logs:logs.map(row=>({...row,message:typeof row.detail==='object'?renderMessage(row.detail):translateDiagnostic(row.detail)})),conflicts:[...conflicts],pendingCount,
       lastSyncedAt:s.lastSyncedAt,
       canEncrypt:secretStore.available,hasToken:!!secrets.pat,hasPeerToken:!!secrets.peer};
   }
-  function report(s,status,message,counts,progress) {
+  function report(s,status,detail,counts,progress) {
     if(s!==state)return;
     s.status=status;
     s.progress=progress;
-    if(message)s.logs=[{time:Date.now(),mode:s.settings.mode,status,message,...counts},...s.logs].slice(0,20);
+    if(detail)s.logs=[{time:Date.now(),mode:s.settings.mode,status,detail,...counts},...s.logs].slice(0,20);
     const value=view(s);
     listeners.forEach(listener=>listener(value));
   }
   function current() {
-    if(!state)throw Error('请先打开 Vault。');
+    if(!state)throw Error(tr("capacitorLocalGit.openAVaultFirst"));
     return state;
   }
   const author=s=>({name:s.settings.name,email:s.settings.email});
@@ -66,7 +67,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
   async function open(s) {
     if(!s.initialized){
       try{await s.engine.open();s.initialized=true;}
-      catch(error){report(s,'error','本地 Git 初始化失败：'+error.message);throw error;}
+      catch(error){report(s,'error',tr("capacitorLocalGit.couldNotInitializeLocalGit")+error.message);throw error;}
     }
   }
   async function refresh(s) {
@@ -81,7 +82,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       await refresh(s);
       const linked=configured(s.settings);
       report(s,s.conflicts.length?'conflict':linked&&s.pendingCount?'pending':'synced',
-        head!==old?'已提交本地版本。':null);
+        head!==old?message("gitSync.localChangesCommitted"):null);
     }
     return head;
   }
@@ -89,7 +90,8 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     const info=await Promise.any((s.settings.endpoints?.length?s.settings.endpoints:[s.settings.peerUrl]).map(async url=>{
       const client=createCapacitorPeer({url,token:s.secrets.peer,vaultId:s.settings.peerVaultId,native,...peerTimeouts});
       const answer=await client.call('info');
-      if(answer?.vaultId!==s.settings.peerVaultId)throw Error('对端 Vault ID 不匹配。');
+      if(answer?.vaultId!==s.settings.peerVaultId)throw Error(tr("gitSync.thePeerVaultIdDoesNotMatch"));
+      await client.enableCapabilities?.(answer.capabilities);
       return {client,answer};
     })).catch(error=>{throw peerFailure(error);});
     return info;
@@ -105,7 +107,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     const start=Date.now();
     const settings=s.settings;
     const check=()=>{
-      if(s!==state||s.settings!==settings)throw Error('工作区或同步设置已变更，请重新同步。');
+      if(s!==state||s.settings!==settings)throw Error(tr("capacitorLocalGit.theWorkspaceOrSyncSettingsChangedSync"));
     };
     const write=task=>serialize(async()=>{check();return task();});
     const progress=value=>{
@@ -124,12 +126,11 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
         s.changedDuringSync=false;
         await snapshot(s,false);
       }
-      const result=await s.engine.apply(oid,author(s),{progress:timings?value=>progress({...value,timings}):progress,
+      const result=await s.engine.apply(oid,author(s),{conflictStrategy:settings.conflictStrategy,progress:timings?value=>progress({...value,timings}):progress,
         onBatch:rows=>applied?.(s.dir,rows)});
       s.conflicts=rememberConflicts(s.conflicts,result.conflicts);
       if(result.conflicts.length)await remember(s);
-      for(const row of result.resolved)report(s,'working',row.relative+' 存在并发修改，已保留最新版本。'+
-        (row.backedUp?'旧版已存入版本历史。':''),{backup:row.backedUp?row.path:undefined});
+      for(const row of result.resolved)report(s,'working',message(row.backedUp?'sync.concurrentArchived':'sync.concurrent',{path:row.relative}),{backup:row.backedUp?row.path:undefined});
       pull+=result.changes.length;
     });
     let result;
@@ -142,7 +143,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
         readObject:oid=>{check();return client.readObject(oid);},
         writeObject:row=>{check();return client.writeObject(row);}
       };
-      result=await exchange(s.engine,guarded,head,accept,{progress,batchBytes:pullLimit,write});
+      result=await exchange(s.engine,guarded,head,accept,{progress,batchBytes:pullLimit,write,anchor:s.lastSynced});
     } else {
       check();
       remoteTransfers.add(s.dir);
@@ -164,7 +165,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       await refresh(s);
       await remember(s);
     });
-    report(s,s.conflicts.length?'conflict':s.changedDuringSync?'pending':'synced',result.upToDate?'已是最新。':'同步完成。',
+    report(s,s.conflicts.length?'conflict':s.changedDuringSync?'pending':'synced',result.upToDate?message("gitSync.alreadyUpToDate"):message("gitSync.syncComplete"),
       {pull,push:result.push,conflict:s.conflicts.length,duration:Date.now()-start,timings:result.timings});
     return view(s);
   }
@@ -172,9 +173,9 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     state?.controller?.dispose();
     state=null;
     if(!dir)return;
-    const s=state={dir,settings:mobileDefaults,secrets:{},logs:[],status:'pending',conflicts:[],pendingCount:0};
+    const s=state={dir,settings:mobileDefaults(),secrets:{},logs:[],status:'pending',conflicts:[],pendingCount:0};
     s.ready=initialize(s,legacyKey).catch(error=>{
-      report(s,'error','无法初始化此知识库的同步：'+error.message);
+      report(s,'error',tr("capacitorLocalGit.couldNotInitializeSyncForThisVault")+error.message);
     });
     return s.ready;
   }
@@ -185,7 +186,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     const id=saved?.vaultId||randomId();
     const secrets=await secretStore.read(id);
     if(s!==state)return;
-    Object.assign(s,{id,settings:{...mobileDefaults,...(saved?.settings||saved),listen:false},secrets,
+    Object.assign(s,{id,settings:{...mobileDefaults(),...(saved?.settings||saved),listen:false},secrets,
       engine:new Engine(dir),conflicts:restoreConflicts(saved?.conflicts,dir),
       lastSynced:saved?.lastSynced,lastSyncedAt:saved?.lastSyncedAt,remoteSync:saved?.remoteSync});
     s.controller=createSyncScheduler({
@@ -195,7 +196,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
         return sync(s);
       },
       probe:()=>peer(s).then(()=>true),
-      onOffline:()=>{if(s.status!=='offline')report(s,'offline','当前网络不满足同步条件，修改保留在本机。');},
+      onOffline:()=>{if(s.status!=='offline')report(s,'offline',message("gitSync.theCurrentNetworkDoesNotAllowSync"));},
       onError:error=>report(s,s.status==='error'?'error':s.conflicts.length?'conflict':
         ['SYNC_OFFLINE','LAN_UNREACHABLE','LAN_TIMEOUT','LAN_REFUSED'].includes(error.code)?'offline':'pending',error.message)
     });
@@ -214,7 +215,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     }else report(s,'off',storageWarning());
   }
   async function saveConfig(s,options,next,secrets) {
-    if(s!==state)throw Error('工作区已切换，请重新配置。');
+    if(s!==state)throw Error(tr("capacitorLocalGit.theWorkspaceChangedConfigureSyncAgain"));
     if(next.enabled)await open(s);
     const before={settings:s.settings,secrets:s.secrets};
     const writes={};
@@ -229,7 +230,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       const restore=Object.fromEntries(Object.keys(writes).map(name=>[name,before.secrets[name]]));
       try{await secretStore.write(s.id,restore);}
       catch(rollbackError){
-        throw Error(error.message+' 恢复先前凭据失败，请重新打开 Vault 后重试。',
+        throw Error(error.message+` ${tr("capacitorLocalGit.couldNotRestorePreviousCredentialsReopenThe")}`,
           {cause:new AggregateError([error,rollbackError])});
       }
       throw error;
@@ -238,7 +239,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       s.controller.changed();
       s.controller.refresh();
     }
-    report(s,next.enabled?(s.conflicts.length?'conflict':'pending'):'off','已保存同步设置。');
+    report(s,next.enabled?(s.conflicts.length?'conflict':'pending'):'off',message("capacitorLocalGit.syncSettingsSaved"));
     return view(s);
   }
   async function configure(options) {
@@ -247,39 +248,39 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     const {next,secrets}=applySettings(before,options,s.secrets,{mobile:true,testLoopback});
     if(options.pairing)await peer({...s,settings:next,secrets});
     return serialize(()=>{
-      if(before!==s.settings)throw Error('同步设置已变更，请重新操作。');
+      if(before!==s.settings)throw Error(tr("capacitorLocalGit.syncSettingsChangedTryAgain"));
       return saveConfig(s,options,next,secrets);
     });
   }
   async function test() {
     const s=await ready();
-    if(!configured(s.settings))return {ok:false,message:'请先扫描、粘贴配对串，或填写仓库地址。'};
+    if(!configured(s.settings))return {ok:false,message:tr("capacitorLocalGit.scanOrPasteAPairingCodeOr")};
     try{
       if(s.settings.mode==='lan') {
         const {answer}=await peer(s);
-        return {ok:true,message:'已连接 '+String(answer.deviceName||'桌面端').slice(0,80)};
+        return {ok:true,message:`${tr("gitSync.connectedTo")} `+String(answer.deviceName||tr("capacitorLocalGit.desktop")).slice(0,80)};
       }
       await git.getRemoteInfo2({...remote(s),forPush:true,protocolVersion:1});
-      return {ok:true,message:'已连接远程仓库。'};
+      return {ok:true,message:tr("capacitorLocalGit.connectedToTheRemoteRepository")};
     }catch(error){return {ok:false,message:s.settings.mode==='lan'?error.message:remoteError(error)};}
   }
   async function ready() {
     const s=current();
     await s.ready;
-    if(s!==state)throw Error('工作区已切换，请重试。');
-    if(!s.controller)throw Error(s.logs[0]?.message||'同步初始化失败。');
+    if(s!==state)throw Error(tr("capacitorLocalGit.theWorkspaceChangedTryAgain"));
+    if(!s.controller)throw Error(s.logs[0]?.message||tr("capacitorLocalGit.couldNotInitializeSync"));
     return s;
   }
   const run=async()=>{
     const s=await ready();
-    if(!s.settings.enabled)throw Error('请先启用同步。');
+    if(!s.settings.enabled)throw Error(tr("gitSync.turnOnSyncFirst"));
     if(!configured(s.settings))return serialize(async()=>{await snapshot(s);return view(s);});
     return s.controller.manual();
   };
   async function resolve(copy,choice) {
     const s=current();
     const row=s.conflicts.find(item=>(item.copy||item.path)===copy);
-    if(!row||!['keep','apply','archive'].includes(choice))throw Error('找不到该冲突，或处理方式无效。');
+    if(!row||!['keep','apply','archive'].includes(choice))throw Error(tr("capacitorLocalGit.theConflictCouldNotBeFoundOr"));
     await open(s);
     const rows=await resolveConflict(s.engine,row,choice,{io,write:atomicWrite,archive});
     s.conflicts=s.conflicts.filter(item=>item!==row);
@@ -288,7 +289,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     await remember(s);
     if(rows.length)await applied?.(s.dir,rows);
     s.controller.changed();
-    report(s,s.conflicts.length?'conflict':'pending','已处理冲突。');
+    report(s,s.conflicts.length?'conflict':'pending',message("capacitorLocalGit.conflictResolved"));
     return view(s);
   }
   async function archiveConflicts() {
@@ -307,7 +308,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     await refresh(s);await remember(s);
     s.controller.changed();
     report(s,s.conflicts.length?'conflict':s.pendingCount?'pending':'synced',
-      '已归档 '+archives.length+' 个历史冲突副本。',{archives});
+      message('sync.archiveCount',{count:archives.length}),{archives});
     return view(s);
   }
   return {
@@ -317,7 +318,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
         return status==='error'?'error':!settings.enabled||!configured(settings)?'local':status==='synced'?'synced':'pending';
       }
       const saved=await readSetting('git:'+dir);
-      const settings={...mobileDefaults,...(saved?.settings||saved)};
+      const settings={...mobileDefaults(),...(saved?.settings||saved)};
       if(!settings.enabled||!configured(settings))return 'local';
       try {
         if((saved.lastSyncedAt||saved.lastSynced)&&!saved.conflicts?.length&&await fs.exists(posixPath(dir,'.git','HEAD'))&&
@@ -326,14 +327,14 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       return 'pending';
     },
     guardTransfer(...paths) {
-      if(paths.some(path=>remoteTransfers.has(path)))throw Error('远程同步正在进行，请完成后再管理此知识库。');
+      if(paths.some(path=>remoteTransfers.has(path)))throw Error(tr("capacitorLocalGit.waitForRemoteSyncToFinishBefore"));
     },
     async checkpoint(dir){
       const s=state;
       if(s?.dir!==dir)return;
       await s.ready;
       if(s!==state||!s.engine)return;
-      await snapshot(s,false).catch(error=>report(s,'error','无法保存本地 Git 版本：'+error.message));
+      await snapshot(s,false).catch(error=>report(s,'error',tr("capacitorLocalGit.couldNotSaveTheLocalGitVersion")+error.message));
     },
     mount,schedule(dir,...files){
       if(state?.dir!==dir||!state.settings.enabled)return;
@@ -351,7 +352,7 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       if(connection.connected===value.connected&&connection.connectionType===value.connectionType)return;
       connection=value;
       if(connection.connected||state?.settings.mode==='lan'&&['wifi','ethernet','cellular'].includes(connection.connectionType))state?.controller?.reconnect();
-      else if(state&&configured(state.settings))report(state,'offline','网络已断开，修改保留在本机。');
+      else if(state&&configured(state.settings))report(state,'offline',message("gitSync.theNetworkIsOfflineYourChangesAre"));
     },
     forget(dir){if(state?.dir===dir){state.controller?.dispose();state=null;}},
     async move(old,dir){
@@ -370,14 +371,14 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
     api:{status:async()=>view(),run,test,configure,
       async importRemote(packet){
         const s=current(),config=await importRemoteConfig(packet,native);
-        if(s!==state)throw Error('工作区已切换，请重新扫描。');
+        if(s!==state)throw Error(tr("capacitorLocalGit.theWorkspaceChangedScanAgain"));
         return configure({...config,mode:'remote',enabled:true});
       },
       resolve:(copy,choice)=>serialize(()=>resolve(copy,choice)),
       archiveConflicts:()=>serialize(archiveConflicts),
       async conflictFiles(copy){
         const s=await ready(),row=s.conflicts.find(item=>(item.copy||item.path)===copy);
-        if(!row)throw Error('找不到该冲突，请刷新冲突列表。');
+        if(!row)throw Error(tr("gitSync.conflictNotFoundRefreshTheList"));
         return readConflict(s.engine,row,io);
       },
       restoreVersion:(file,id)=>serialize(async()=>{
@@ -388,8 +389,26 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
         s.controller.changed();
       }),
       clearConflict:copy=>serialize(()=>resolve(copy,'archive'))},
+    isEnabled:()=>Boolean(state?.settings.enabled),
+    async relocateHistory(dir,from,to) {
+      if(!dir)return;
+      const engine=new Engine(dir);
+      await engine.history.relocate(from,to);
+    },
+    async recordUndo(dir,file,bytes) {
+      const engine=new Engine(dir);
+      await engine.history.record(await engine.workspaceFile(file),bytes,'undo','undo-review');
+    },
+    async recordExternal(dir,file,text) {
+      const engine=new Engine(dir);
+      await engine.history.record(await engine.workspaceFile(file),new TextEncoder().encode(text),'external','external-edit');
+    },
+    async recordSaved(dir,file,text) {
+      const engine=new Engine(dir);
+      await engine.history.record(await engine.workspaceFile(file),new TextEncoder().encode(text),'saved','local-save');
+    },
     async history(dir,file,id) {
-      if(!dir)throw Error('请先打开 Vault。');
+      if(!dir)throw Error(tr("capacitorLocalGit.openAVaultFirst"));
       const engine=new Engine(dir);
       file=await engine.workspaceFile(file);
       if(id==='current'&&(await engine.history.list(file)).length)return (await readConflictFile(engine,file,io)).text;
@@ -399,13 +418,17 @@ export function createLocalGit({fs,readSetting,saveSetting,serialize,atomicWrite
       const filepath=file.slice(dir.length+1);
       if(id)return new TextDecoder().decode((await git.readBlob({fs,dir,oid:id,filepath})).blob);
       const versions=[];
+      let lastBlobOid=null;
       for(const {oid,commit} of await git.log({fs,dir,depth:30}).catch(error=>{
         if(error.code==='NotFoundError')return [];
         throw error;
       })) {
-        try{await git.readBlob({fs,dir,oid,filepath});}
+        let blob;
+        try{blob=await git.readBlob({fs,dir,oid,filepath});}
         catch(error){if(error.code==='NotFoundError')continue;throw error;}
-        versions.push({id:oid,time:commit.author.timestamp*1000});
+        const entry={id:oid,time:commit.author.timestamp*1000};
+        if(blob.oid===lastBlobOid)versions[versions.length-1]=entry;
+        else {lastBlobOid=blob.oid;versions.push(entry);}
       }
       return [...snapshots,...versions].sort((a,b)=>b.time-a.time);
     }

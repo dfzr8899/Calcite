@@ -130,7 +130,8 @@ async function credentialClearing() {
 
 async function lanAndConflicts(scratch) {
   const desktop=await boot(path.join(scratch,'desktop-lan'));
-  const mobile=await phone({peerTimeouts:{transferTimeout:1200}});
+  const peerTimeouts={transferTimeout:10000};
+  const mobile=await phone({peerTimeouts});
   try {
     for(const file of ['X.md','Y.md','C1.md','C2.md','D.md'])await put(desktop,file,'# '+file+'\n\n共同的行\n');
     await patch(desktop,{enabled:true,listen:true,auto:false});
@@ -161,12 +162,14 @@ async function lanAndConflicts(scratch) {
     const unsubscribe=mobile.local.subscribe(value=>states.push({status:value.status,...value.progress}));
     await Promise.all(Array.from({length:126},(_,i)=>put(desktop,'Bulk-'+i+'.md','# 批量笔记 '+i)));
     mobile.stats.hang=true;
+    peerTimeouts.transferTimeout=1200;
     const hung=assert.rejects(mobile.api.run(),/局域网 .*连接超时/);
     await until(()=>states.some(row=>row.phase==='pull'),'hung pull started');
     assert.match(await mobile.read('X.md'),/手机离线修改/);
     await hung;
     assert.notEqual((await mobile.api.status()).status,'working');
     mobile.stats.hang=false;
+    peerTimeouts.transferTimeout=10000;
     const started=Date.now();
     mobile.stats.batches.length=0;
     await mobile.api.run();

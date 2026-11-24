@@ -380,7 +380,29 @@ input.lg-switch[type="checkbox"]:focus-visible { outline:2px solid var(--focus-b
 .segmented-control button:is(.active, [aria-selected="true"]) { color: var(--text-primary); background: transparent; }
 .inspector-tabs { --segment-count: 2; flex: 1; min-width: 0; }
 .inspector-tabs button { height: 25px; padding-inline: 4px; min-width: 0; text-overflow: ellipsis; overflow: hidden; }
+[data-platform="mobile"] .outline-panel .inspector-tabs {
+  display:flex;flex:0 1 auto;flex-wrap:wrap;gap:2px;
+}
+[data-platform="mobile"] .outline-panel .inspector-tabs::before { content:none; }
+[data-platform="mobile"] .outline-panel .inspector-tabs button {
+  flex:none;min-height:32px;height:auto;padding:4px 10px;font-size:13px;overflow:visible;text-overflow:clip;
+}
+[data-platform="mobile"] .outline-panel .inspector-tabs button[aria-selected="true"] {
+  background:var(--surface-pill);box-shadow:var(--pill-shadow);
+}
+[data-platform="mobile"] .outline-panel .mobile-inspector-close { background:var(--surface-inset); }
 .mode-switch { --segment-count: 3; min-width: 175px; }
+.settings-center .language-picker { display:grid;gap:6px; }
+.settings-center .language-picker select { width:100%;box-sizing:border-box; }
+.settings-center #settings-appearance .lg-section { margin-bottom:12px; }
+.history-diff:has(.external-versions) { max-height:55vh;overflow:auto; }
+.external-versions { width:100%;table-layout:fixed;border-collapse:collapse;text-align:left; }
+.external-versions :is(th,td) { padding:4px 8px;border:1px solid var(--separator); }
+.external-versions td { white-space:pre-wrap;overflow-wrap:anywhere;vertical-align:top;font-family:var(--font-code); }
+.external-versions .diff-added { background:color-mix(in srgb,var(--success) 14%,var(--editor-bg)); }
+.external-versions .diff-removed { background:color-mix(in srgb,var(--danger) 14%,var(--editor-bg)); }
+.history-dialog:has(.external-versions) > .feature-buttons { padding:0 12px 12px; }
+:lang(en-US) :is(.mode-switch button,#sync-status) { white-space:nowrap; }
 
 #appearance-toggle:is(:hover, :focus-visible), .titlebar:has(~ #appearance-panel:popover-open) #appearance-toggle { color: var(--heading); }
 #appearance-panel { position: fixed; inset: auto; margin: 0; width: min(256px, calc(100vw - 16px)); padding: 10px; }

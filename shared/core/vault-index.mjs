@@ -1,3 +1,4 @@
+import {getLocale} from '../i18n/index.mjs';
 import {marked} from 'marked';
 import {noteTags,properties,splitFrontmatter} from '../note-metadata.mjs';
 import {headingIdentifiers,headingIndex,linkDirectory,mapLinks,markdown,splitLink} from '../note-links.mjs';
@@ -186,7 +187,7 @@ export class VaultIndex {
     const {target,heading,ambiguous}=this.resolve(source,destination,wiki);
     if(ambiguous)return {status:'ambiguous',candidates:ambiguous.map(path=>({
       path,identifier:this.directory.identifier(path),label:this.relative(path)
-    })).sort((a,b)=>a.label.localeCompare(b.label,'zh-CN'))};
+    })).sort((a,b)=>a.label.localeCompare(b.label,getLocale()))};
     const note=target&&this.notes.get(this.key(target));
     if(!note)return {status:wiki&&raw?'placeholder':'broken'};
     const fragment=heading?.slice(1)||'';

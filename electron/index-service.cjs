@@ -1,3 +1,4 @@
+const {t:tr}=require("../shared/i18n/index.mjs");
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const {createHash,randomUUID}=require('node:crypto');
@@ -37,7 +38,7 @@ async function cachePath(root,create=false) {
   const dir=path.join(root,CACHE_DIRECTORY);
   if(create)await fs.mkdir(dir).catch(error=>{if(error.code!=='EEXIST')throw error;});
   const stat=await fs.lstat(dir);
-  if(!stat.isDirectory()||stat.isSymbolicLink()||path.relative(dir,await fs.realpath(dir)))throw Error('索引缓存目录无效。');
+  if(!stat.isDirectory()||stat.isSymbolicLink()||path.relative(dir,await fs.realpath(dir)))throw Error(tr("indexService.invalidIndexCacheDirectory"));
   return path.join(dir,CACHE_FILE);
 }
 

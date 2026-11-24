@@ -1,7 +1,11 @@
+const {t:tr,message,renderMessage,translateDiagnostic}=require("../shared/i18n/index.mjs");
 const crypto=require('node:crypto');
 const os=require('node:os');
 const fs=require('node:fs/promises');
 const path=require('node:path');
+const {execFile}=require('node:child_process');
+const {promisify}=require('node:util');
+const runFile=promisify(execFile);
 const git=require('isomorphic-git');
 const httpClient=require('isomorphic-git/http/node');
 const QRCode=require('qrcode');
@@ -18,7 +22,7 @@ const {findConflicts,readConflict,rememberConflicts,resolveConflict}=require('..
 const newToken=()=>crypto.randomBytes(32).toString('hex');
 const defaults={...base,deviceName:os.hostname().slice(0,80)};
 const author=s=>({name:s.settings.name||'Calcite',email:s.settings.email||'calcite@local'});
-const sharing=s=>s.server&&!s.settings.peerUrl?'本机局域网共享已就绪（端口 '+s.server.port+'），请在手机端扫码或发起同步。':'';
+const sharing=s=>s.server&&!s.settings.peerUrl?message('sync.sharing',{port:s.server.port}):null;
 
 function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,archive,network=true,allowLocal=false,timing={}}) {
   let state,foreground=true,connection={connected:true,connectionType:'unknown'};
@@ -28,21 +32,21 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     try{return safeStorage.decryptString(Buffer.from(value,'base64'));}catch{return '';}
   };
   const encode=value=>value&&secured()?safeStorage.encryptString(value).toString('base64'):undefined;
-  function report(s,status,message,counts,progress) {
+  function report(s,status,detail,counts,progress) {
     if(s!==state)return;
     s.status=status;
     s.progress=progress;
-    if(message)s.logs=[{time:Date.now(),mode:s.settings.mode,status,message,...counts},...s.logs].slice(0,20);
+    if(detail)s.logs=[{time:Date.now(),mode:s.settings.mode,status,detail,...counts},...s.logs].slice(0,20);
     publish(view());
   }
   function current() {
-    if(!state)throw Error('请先打开工作区。');
+    if(!state)throw Error(tr("gitSync.openAWorkspaceFirst"));
     return state;
   }
   function view() {
     if(!state)return {settings:{...defaults},status:'off',logs:[],conflicts:[],pendingCount:0,canEncrypt:secured()};
     const {settings,status,logs,conflicts,server,pat,peerToken,pendingCount}=state;
-    return {settings:{...settings},status,progress:state.progress,notice:sharing(state),logs:[...logs],conflicts:[...conflicts],pendingCount,canEncrypt:secured(),
+    return {settings:{...settings},status,progress:state.progress,notice:renderMessage(sharing(state)),logs:logs.map(row=>({...row,message:typeof row.detail==='object'?renderMessage(row.detail):translateDiagnostic(row.detail)})),conflicts:[...conflicts],pendingCount,canEncrypt:secured(),
       hasToken:!!pat,hasPeerToken:!!peerToken,port:server?.port};
   }
   async function remember(s) {
@@ -63,40 +67,40 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     const old=await s.engine.head(),head=await s.engine.snapshot(author(s));
     if(announce){
       await refresh(s);
-      report(s,s.conflicts.length?'conflict':s.pendingCount?'pending':'synced',head!==old?'已提交本地版本。':null);
+      report(s,s.conflicts.length?'conflict':s.pendingCount?'pending':'synced',head!==old?message("gitSync.localChangesCommitted"):null);
     }
     return head;
   }
   async function accept(s,head,timings) {
-    if(s!==state||!s.settings.enabled)throw Error('工作区同步已关闭。');
+    if(s!==state||!s.settings.enabled)throw Error(tr("gitSync.syncIsOffForThisWorkspace"));
     const result=await s.engine.apply(head,author(s),{
+      conflictStrategy:s.settings.conflictStrategy,
       beforeWrite:rows=>reserve(s.root,rows),
       progress:value=>report(s,'working',null,null,timings?{...value,timings}:value),
       onBatch:rows=>applied(s.root,rows)
     });
     s.conflicts=rememberConflicts(s.conflicts,result.conflicts);
     if(result.conflicts.length)await remember(s);
-    for(const row of result.resolved)report(s,'working',row.relative+' 存在并发修改，已保留最新版本。'+
-      (row.backedUp?'旧版已存入版本历史。':''),{backup:row.backedUp?row.path:undefined});
+    for(const row of result.resolved)report(s,'working',message(row.backedUp?'sync.concurrentArchived':'sync.concurrent',{path:row.relative}),{backup:row.backedUp?row.path:undefined});
     return result.changes.length;
   }
   async function startServer(s) {
     s.server?.close();s.server=null;
     if(!s.settings.enabled||s.settings.mode!=='lan'||!s.settings.listen)return;
     const options={engine:s.engine,vaultId:s.vaultId,deviceName:s.settings.deviceName,token:s.token,network,
-      onError:()=>report(s,'pending','局域网广播或监听遇到错误。'),
+      onError:()=>report(s,'pending',message("gitSync.lanDiscoveryOrListeningFailed")),
       prepare:()=>s.snapshotInProgress||run(()=>snapshot(s,false)),
       receive:(head,shallow)=>{
         const job=run(async()=>{
           const start=Date.now();
-          if(s!==state||!s.settings.enabled)throw Error('工作区已切换。');
+          if(s!==state||!s.settings.enabled)throw Error(tr("gitSync.workspaceSwitched"));
           await snapshot(s,false);
           if(shallow?.length)await s.engine.importShallow(shallow);
           await git.writeRef({...s.engine.args,ref:'refs/remotes/peer/main',value:head,force:true});
           const pull=await accept(s,head);
           s.lastSynced=await s.engine.head();
           await refresh(s);await remember(s);
-          report(s,s.conflicts.length?'conflict':'synced','已接收局域网 Git 提交。',{pull,push:0,conflict:s.conflicts.length,duration:Date.now()-start});
+          report(s,s.conflicts.length?'conflict':'synced',message("gitSync.receivedAGitCommitOverLan"),{pull,push:0,conflict:s.conflicts.length,duration:Date.now()-start});
         });
         if(!s.snapshotInProgress)return job;
         job.catch(error=>report(s,'pending',error.message));
@@ -126,7 +130,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     s.controller=createSyncScheduler({
       ...timing,policy:()=>({...s.settings,wifiOnly:wifiOnly(s.settings),configured:configured(s.settings),pending:s.pendingCount>0}),
       network:()=>connection,snapshot:()=>run(()=>snapshot(s)),sync:()=>run(()=>sync(s)),probe:()=>peer(s).then(()=>true),
-      onOffline:()=>{if(s.status!=='offline')report(s,'offline','当前网络不满足同步条件，修改保留在本机。');},
+      onOffline:()=>{if(s.status!=='offline')report(s,'offline',message("gitSync.theCurrentNetworkDoesNotAllowSync"));},
       onError:error=>report(s,s.conflicts.length?'conflict':
         ['SYNC_OFFLINE','LAN_UNREACHABLE','LAN_TIMEOUT','LAN_REFUSED'].includes(error.code)?'offline':'pending',error.message)
     });
@@ -157,7 +161,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     }
     if(next.remoteUrl!==previous.remoteUrl||next.branch!==previous.branch||s.pat!==prior.pat||!next.enabled)s.transfer?.close();
     report(s,next.enabled?(s.conflicts.length?'conflict':sharing(s)?'synced':'pending'):'off',
-      next.enabled?sharing(s)||'同步设置已保存。':'已关闭同步。');
+      next.enabled?sharing(s)||message("gitSync.syncSettingsSaved"):message("gitSync.syncTurnedOff"));
     s.controller.refresh();
     if(next.enabled)s.controller.changed();
     return view();
@@ -167,15 +171,26 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     return Promise.any(urls.map(async url=>{
       const client=peerClient({url,token:s.peerToken,vaultId:s.settings.peerVaultId});
       const info=await client.call('info');
-      if(info?.vaultId!==s.settings.peerVaultId)throw Error('对端 Vault ID 不匹配。');
+      if(info?.vaultId!==s.settings.peerVaultId)throw Error(tr("gitSync.thePeerVaultIdDoesNotMatch"));
+      client.enableCapabilities(info.capabilities);
       return {client,info};
     })).catch(error=>{throw peerFailure(error);});
+  }
+  async function maybeCompactGit(s) {
+    if(s.compacted||s!==state)return;
+    try{
+      const sample=await fs.readdir(path.join(s.root,'.git','objects','00')).catch(()=>[]);
+      if(sample.length<12)return;
+      s.compacted=true;
+      await runFile('git',['-C',s.root,'gc','--auto','--quiet'],{windowsHide:true,timeout:60000});
+      s.engine.reachableCache=null;
+    }catch{/* System git may be absent; loose objects stay valid. */}
   }
   function remote(s) {
     const url=repositoryUrl(s.settings.remoteUrl,allowLocal),origin=new URL(url).origin;
     return {url,http:{async request(args){
       const target=syncUrl(args.url,{testLoopback:allowLocal,request:true});
-      if(target.origin!==origin)throw Error('拒绝跨站 Git 请求。');
+      if(target.origin!==origin)throw Error(tr("gitSync.crossOriginGitRequestBlocked"));
       const timeout=AbortSignal.timeout(40000);
       const signal=args.signal?AbortSignal.any([args.signal,timeout]):timeout;
       let result;
@@ -194,7 +209,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
       if(result.statusCode>=300&&result.statusCode<400){
         await result.body.cancel?.().catch(()=>{});
         result.body.destroy?.();
-        throw Error('Git 服务器重定向已拦截。');
+        throw Error(tr("gitSync.gitServerRedirectBlocked"));
       }
       return result;
     }},onAuth:authUrl=>s.pat&&new URL(authUrl).origin===origin?{username:s.settings.remoteUser||'oauth2',password:s.pat}:null};
@@ -203,13 +218,13 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
   async function test() {
     const s=current();
     if(s.settings.mode==='lan') {
-      if(!s.settings.peerUrl)return {ok:!!s.server,message:sharing(s)||'请先开启服务或填写对端地址。'};
-      try {const {info}=await peer(s);return {ok:true,message:'已连接 '+String(info.deviceName||'对端').slice(0,80)};}
+      if(!s.settings.peerUrl)return {ok:!!s.server,message:renderMessage(sharing(s))||tr("gitSync.startSharingOrEnterAPeerAddress")};
+      try {const {info}=await peer(s);return {ok:true,message:`${tr("gitSync.connectedTo")} `+String(info.deviceName||tr("gitSync.peer")).slice(0,80)};}
       catch(error){return {ok:false,message:error.message};}
     }
     try {
       const result=await git.getRemoteInfo2({...remote(s),forPush:true,protocolVersion:1});
-      return {ok:true,message:result.refs.some(row=>row.ref.startsWith('refs/heads/'))?'连接成功，远程仓库接受推送协议。':'连接成功，空仓库等待首次推送。'};
+      return {ok:true,message:result.refs.some(row=>row.ref.startsWith('refs/heads/'))?tr("gitSync.connectedTheRemoteAcceptsGitPushes"):tr("gitSync.connectedTheEmptyRepositoryIsReadyFor")};
     }catch(error){return {ok:false,message:remoteError(error)};}
   }
 
@@ -229,7 +244,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
         result=await exchange(s.engine,client,head,async remoteHead=>{
           await git.writeRef({...s.engine.args,ref:'refs/remotes/peer/main',value:remoteHead,force:true});
           await receive(remoteHead);
-        },{progress});
+        },{progress,anchor:s.lastSynced});
       }else if(s.settings.mode==='remote'&&s.settings.remoteUrl) {
         const transport=remote(s),branch=s.settings.branch;
         const last=s.remoteSync?.url===transport.url&&s.remoteSync.branch===branch?s.remoteSync.head:undefined;
@@ -237,12 +252,13 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
         s.remoteSync={url:transport.url,branch,head:result.head};
       }else {
         await refresh(s);
-        report(s,s.conflicts.length?'conflict':sharing(s)?'synced':'pending',sharing(s)||'已保存本机 Git 版本，等待配置对端。');
+        report(s,s.conflicts.length?'conflict':sharing(s)?'synced':'pending',sharing(s)||message("gitSync.localGitVersionSavedWaitingForA"));
         return view();
       }
       s.lastSynced=result.head;
       await refresh(s);await remember(s);
-      report(s,s.conflicts.length?'conflict':'synced',result.upToDate?'已是最新。':'同步完成。',
+      if(!s.conflicts.length)await maybeCompactGit(s);
+      report(s,s.conflicts.length?'conflict':'synced',result.upToDate?message("gitSync.alreadyUpToDate"):message("gitSync.syncComplete"),
         {pull,push:result.push,conflict:s.conflicts.length,duration:Date.now()-start,timings:result.timings});
       return view();
     }finally{s.snapshotInProgress=null;}
@@ -255,21 +271,21 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     s.controller.changed();
   }
   async function pair() {
-    const s=current();if(!s.server)throw Error('请先开启局域网共享。');
+    const s=current();if(!s.server)throw Error(tr("gitSync.startLanSharingFirst"));
     const {url,endpoints}=s.server;
     const packet=writePacket('calcite-sync:',{url,endpoints:endpoints.slice(0,10),peerName:s.settings.deviceName,vaultId:s.vaultId,token:s.token});
     return {packet,url,vaultId:s.vaultId,image:await QRCode.toDataURL(packet,{margin:2,width:300})};
   }
   async function remotePair() {
     const s=current();
-    if(!s.settings.enabled||s.settings.mode!=='remote'||!s.settings.remoteUrl)throw Error('请先保存远程仓库设置。');
+    if(!s.settings.enabled||s.settings.mode!=='remote'||!s.settings.remoteUrl)throw Error(tr("gitSync.saveYourRemoteRepositorySettingsFirst"));
     const {remoteUrl,remoteUser,branch,name,email,wifiOnly}=s.settings;
     s.transfer?.close();
     s.transfer=await createConfigPair({remoteUrl,remoteUser,branch,name,email,wifiOnly,pat:s.pat},{network});
     return s.transfer.view;
   }
   async function revoke() {
-    const s=current();s.token=newToken();await startServer(s);await remember(s);report(s,'pending','原有配对已吊销。');
+    const s=current();s.token=newToken();await startServer(s);await remember(s);report(s,'pending',message("gitSync.previousPairingRevoked"));
     return s.server?pair():null;
   }
   async function clearConflict(copy) {
@@ -278,7 +294,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
   }
   async function resolve(copy,choice) {
     const s=current(),row=s.conflicts.find(item=>(item.copy||item.path)===copy);
-    if(!row)throw Error('找不到该冲突，请刷新冲突列表。');
+    if(!row)throw Error(tr("gitSync.conflictNotFoundRefreshTheList"));
     await enable(s);
     const rows=await resolveConflict(s.engine,row,choice,{io:fs,write:atomicWrite,archive,beforeWrite:items=>reserve(s.root,items)});
     await s.engine.snapshot(author(s));
@@ -301,13 +317,13 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     await snapshot(s,false);
     s.engine.legacyCandidates=undefined;
     await refresh(s);await remember(s);arm();
-    report(s,s.status,'已归档 '+archives.length+' 个历史冲突副本。',{archives});
+    report(s,s.status,message('sync.archiveCount',{count:archives.length}),{archives});
     return view();
   }
   return {switchVault,configure,view,test,arm,pair,revoke,remotePair,clearConflict,resolve,archiveConflicts,
     conflictFiles(copy) {
       const s=current(),row=s.conflicts.find(item=>(item.copy||item.path)===copy);
-      if(!row)throw Error('找不到该冲突，请刷新冲突列表。');
+      if(!row)throw Error(tr("gitSync.conflictNotFoundRefreshTheList"));
       return readConflict(s.engine,row,fs);
     },
     async restoreVersion(file,id){
@@ -317,7 +333,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
     },
     cancelRemotePair(){state?.transfer?.close();},
     request(){
-      const s=current();if(!s.settings.enabled)throw Error('请先启用同步。');
+      const s=current();if(!s.settings.enabled)throw Error(tr("gitSync.turnOnSyncFirst"));
       return configured(s.settings)?s.controller.manual():run(()=>sync(s));
     },
     focus(active){foreground=active;state?.controller.enter(active);},
@@ -325,7 +341,7 @@ function createGitSync({safeStorage,net,read,write,run,publish,reserve,applied,a
       if(connection.connected===online)return;
       connection={connected:online,connectionType:'unknown'};
       if(online)state?.controller.reconnect();
-      else if(state?.settings.enabled&&configured(state.settings))report(state,'offline','网络已断开，修改保留在本机。');
+      else if(state?.settings.enabled&&configured(state.settings))report(state,'offline',message("gitSync.theNetworkIsOfflineYourChangesAre"));
     },
     stop(){state?.controller.dispose();state?.server?.close();state?.transfer?.close();}
   };

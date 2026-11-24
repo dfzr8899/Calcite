@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
@@ -34,7 +35,7 @@ export function renderNote(text, { numberEquations = false, macros, externalPrev
   const codes = [];
   text=protectCode(text,code=>codeToken+(codes.push(code)-1)+'END');
   text = text.replace(/^ {0,3}<!--\s*pagebreak\s*-->[ \t]*(?=\r?$)/gim,()=>
-    '\n'+store('<hr class="note-pagebreak" aria-label="分页">')+'\n');
+    '\n'+store(`<hr class="note-pagebreak" aria-label="${tr("noteRender.pageBreak")}">`)+'\n');
   const labels = new Map();
   let equation = 0;
   text.replace(/\$\$([\s\S]+?)\$\$/g, (_, body) => {
@@ -45,19 +46,22 @@ export function renderNote(text, { numberEquations = false, macros, externalPrev
   });
   const references = value => value.replace(/\\(eqref|ref)\{([^{}]+)\}/g,
     (_, type, label) => '\\text{'+(type==='eqref'?'(':'')+(labels.get(label)||'??').replace(/[{}\\]/g,'')+(type==='eqref'?')':'')+'}');
-  equation = 0;
-  text = text.replace(/\$\$([\s\S]+?)\$\$|(?<![\\\w])\$([^\n$]+?)\$/g, (_, block, inline) => {
-    let value = references(block ?? inline);
-    if (block) {
-      const hasLabel = /\\label\{[^{}]+\}/.test(value);
-      value = value.replace(/\\label\{[^{}]+\}/g,'');
-      if (numberEquations || hasLabel) {
-        equation++;
-        if (!/\\tag\*?\{/.test(value)) value += '\\tag{'+equation+'}';
+  function renderMath(source, countEquations=true) {
+    return source.replace(/\$\$([\s\S]+?)\$\$|(?<![\\\w])\$([^\n$]+?)\$/g, (_, block, inline) => {
+      let value = references(block ?? inline);
+      if (block) {
+        const hasLabel = /\\label\{[^{}]+\}/.test(value);
+        value = value.replace(/\\label\{[^{}]+\}/g,'');
+        if (countEquations && (numberEquations || hasLabel)) {
+          equation++;
+          if (!/\\tag\*?\{/.test(value)) value += '\\tag{'+equation+'}';
+        }
       }
-    }
-    return store(katex.renderToString(value,{...mathOptions(macros),displayMode:!!block}));
-  });
+      return store(katex.renderToString(value,{...mathOptions(macros),displayMode:!!block}));
+    });
+  }
+  equation = 0;
+  text = renderMath(text, true);
   const definitions = new Map();
   text = text.replace(/^ {0,3}\[\^([^\]\n]+)\]:[ \t]*([^\n]*(?:\n(?: {4}|\t)[^\n]*)*)/gm, (_, label, body) => {
     definitions.set(label.trim().toLowerCase(), body.replace(/\n(?: {4}|\t)/g,'\n'));
@@ -83,7 +87,7 @@ export function renderNote(text, { numberEquations = false, macros, externalPrev
   function parse(value) {
     const content = document.createElement('div');
     content.innerHTML = DOMPurify.sanitize(marked.parse(decodeCodes(value),{gfm:true,breaks:false}),{
-      FORBID_TAGS:externalPreview?['iframe','frame','style','link','form','button','textarea','select','use','image','feImage']:['iframe','frame'],
+      FORBID_TAGS:externalPreview?['iframe','frame','style','link','form','button','textarea','select','use','image','feImage']:['iframe','frame','style','link','object','embed','form','base','meta'],
       ...(externalPreview?{ALLOW_DATA_ATTR:false,FORBID_ATTR:['src','srcset','style','background','poster','ping','action','formaction','autofocus']}:{}),
       ALLOWED_URI_REGEXP:/^(?:https?:|mailto:|tel:|calcite-wiki:\/\/|note-image:\/\/local\/|[^a-z]|[a-z+.-]+(?:[^a-z+.:\-]|$))/i
     });
@@ -107,7 +111,7 @@ export function renderNote(text, { numberEquations = false, macros, externalPrev
     }
     return content.innerHTML;
   }
-  text = wiki(text).replace(/^ {0,3}\[toc\][ \t]*$/gim, () => store('<nav class="note-toc" aria-label="文内目录"></nav>'));
+  text = wiki(text).replace(/^ {0,3}\[toc\][ \t]*$/gim, () => store(`<nav class="note-toc" aria-label="${tr("noteRender.tableOfContents")}"></nav>`));
   text = text.replace(blockMarker, (_, id) => store('<span class="block-marker" data-block-id="'+escape(id)+'"></span>'));
   const container = document.createElement('div');
   container.innerHTML = parse(text);
@@ -139,17 +143,18 @@ export function renderNote(text, { numberEquations = false, macros, externalPrev
   for (const toc of container.querySelectorAll('.note-toc')) {
     const nav = toc.parentElement.tagName==='P' && toc.parentElement.children.length===1 ? toc.parentElement : toc;
     if (nav!==toc) nav.replaceWith(toc);
-    toc.innerHTML = '<strong>目录</strong><ul>'+headings.map(heading=>
+    toc.innerHTML = `<strong>${tr("exportCenter.contents")}</strong><ul>`+headings.map(heading=>
       '<li style="margin-left:'+((Number(heading.tagName[1])-1)*14)+'px"><a data-local-anchor href="#'+escape(heading.id)+'">'+escape(heading.textContent)+'</a></li>').join('')+'</ul>';
   }
   if (used.size) {
     const list = document.createElement('section');
     list.className = 'note-footnotes';
-    list.setAttribute('aria-label','脚注');
+    list.setAttribute('aria-label',tr("noteRender.footnotes"));
     list.innerHTML = '<hr><ol>'+[...used].map(([key,{index,count}]) => {
       const id = prefix+'-fn-'+index;
-      const backlinks = Array.from({length:count},(_,i)=>'<a data-local-anchor href="#'+id+'-ref-'+(i+1)+'" aria-label="返回引用 '+(i+1)+'">↩</a>').join(' ');
-      return '<li id="'+id+'">'+parse(wiki(definitions.get(key)))+' '+backlinks+'</li>';
+      const backlinks = Array.from({length:count},(_,i)=>'<a data-local-anchor href="#'+id+'-ref-'+(i+1)+`" aria-label="${tr("noteRender.returnToReference")} `+(i+1)+'">↩</a>').join(' ');
+      const protectedFootnote = protectCode(definitions.get(key),code=>codeToken+(codes.push(code)-1)+'END');
+      return '<li id="'+id+'">'+parse(wiki(renderMath(protectedFootnote,false)))+' '+backlinks+'</li>';
     }).join('')+'</ol>';
     container.append(list);
   }
@@ -163,7 +168,7 @@ export function wrapReadingTables(container) {
     wrap.className='table-wrap';
     wrap.tabIndex=0;
     wrap.setAttribute('role','region');
-    wrap.setAttribute('aria-label','横向滚动表格');
+    wrap.setAttribute('aria-label',tr("noteRender.scrollTableHorizontally"));
     table.before(wrap);
     wrap.append(table);
   }

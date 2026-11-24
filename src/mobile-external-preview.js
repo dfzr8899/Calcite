@@ -1,3 +1,4 @@
+import {t as tr} from "../shared/i18n/index.mjs";
 import {errorMessage} from './error-message.js';
 import {showDialog} from './mobile-ui.js';
 import {wrapReadingTables} from './note-render.js';
@@ -5,13 +6,13 @@ import {wrapReadingTables} from './note-render.js';
 export function showExternalMarkdown(file,{render,importNote,exportNote,openLink}) {
   const dialog=document.createElement('dialog');
   dialog.className='feature-dialog external-preview';
-  dialog.setAttribute('aria-label','外部临时预览');
-  dialog.innerHTML='<header><h2></h2><form method="dialog"><button aria-label="关闭外部预览" autofocus>×</button></form></header>'+
-    '<div class="external-preview-actions"><button type="button" class="primary" data-import>导入到当前知识库</button>'+
-    '<button type="button" data-export="pdf">导出 PDF</button><button type="button" data-export="png">导出长图</button></div>'+
-    '<p role="status" hidden></p><details hidden><summary>大纲</summary><nav aria-label="外部文件大纲"></nav></details>'+
+  dialog.setAttribute('aria-label',tr("mobileExternalPreview.externalPreview"));
+  dialog.innerHTML=`<header><h2></h2><form method="dialog"><button aria-label="${tr("mobileExternalPreview.closeExternalPreview")}" autofocus>×</button></form></header>`+
+    `<div class="external-preview-actions"><button type="button" class="primary" data-import>${tr("mobileExternalPreview.importIntoCurrentVault")}</button>`+
+    `<button type="button" data-export="pdf">${tr("main.exportPdf2")}</button><button type="button" data-export="png">${tr("mobileExternalPreview.exportLongImage")}</button><button type="button" data-export="html">${tr("activity.exportHtml")}</button></div>`+
+    `<p role="status" hidden></p><details hidden><summary>${tr("main.outline")}</summary><nav aria-label="${tr("mobileExternalPreview.externalFileOutline")}"></nav></details>`+
     '<article class="prose external-preview-body"></article>';
-  dialog.querySelector('h2').textContent='外部临时预览 · '+file.name;
+  dialog.querySelector('h2').textContent=`${tr("mobileExternalPreview.externalPreview2")} `+file.name;
   const body=dialog.querySelector('article'),outline=dialog.querySelector('details'),nav=outline.querySelector('nav');
   const feedback=dialog.querySelector('[role="status"]');
   const message=text=>{feedback.textContent=text;feedback.hidden=!text;};
@@ -33,7 +34,8 @@ export function showExternalMarkdown(file,{render,importNote,exportNote,openLink
   for(const button of dialog.querySelectorAll('[data-export]'))
     button.onclick=()=>perform(async()=>{
       const result=await exportNote(button.dataset.export,file);
-      if(result)message(result==='print'?'已打开系统打印，请选择「另存为 PDF」。':'长图已导出。');
+      if(result)message(result==='print'?tr("main.systemPrintingOpenedSelectSaveAsPdf"):
+        button.dataset.export==='png'?tr("mobileExternalPreview.longImageExported"):tr('activity.htmlExported'));
     });
   dialog.addEventListener('click',event=>{
     event.stopPropagation();

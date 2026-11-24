@@ -1,3 +1,4 @@
+import {t as tr} from "../i18n/index.mjs";
 /** @import {SyncConfig} from './types.mjs' */
 /** @typedef {'snapshot'|'sync'|'probe'} RequestKind */
 /** @typedef {Pick<SyncConfig, 'enabled'|'mode'|'auto'|'wifiOnly'> & {configured: boolean, pending: boolean}} SyncPolicy */
@@ -15,16 +16,17 @@
  * @property {number} [syncDelay]
  * @property {number} [cooldown]
  * @property {number[]} [backoff]
+ * @property {number} [remotePoll]
  */
 
 /** @param {SchedulerOptions} options */
 export function createSyncScheduler({policy,network,snapshot,sync,probe,onOffline=()=>{},onError=()=>{},
-  snapshotDelay=2500,syncDelay=12000,cooldown=60000,backoff=[15000,30000,60000]}) {
+  snapshotDelay=2500,syncDelay=12000,cooldown=60000,backoff=[15000,30000,60000],remotePoll=180000}) {
   /** @type {Promise<unknown>|null|undefined} */
   let runner;
   /** @type {QueuedSync|null|undefined} */
   let queued;
-  let snapshotTimer,syncTimer,probeTimer,closed=false,foreground=true,probeIndex=0,lastSync=0;
+  let snapshotTimer,syncTimer,probeTimer,remoteTimer,closed=false,foreground=true,probeIndex=0,lastSync=0;
 
   function online(settings) {
     const connection=network();
@@ -32,9 +34,23 @@ export function createSyncScheduler({policy,network,snapshot,sync,probe,onOfflin
     const reachable=connection.connected||settings.mode==='lan'&&(local||connection.connectionType==='cellular');
     return reachable&&(settings.wifiOnly!==true||local||connection.connectionType==='unknown');
   }
+  function scheduleRemotePoll() {
+    clearTimeout(remoteTimer);
+    const settings=policy();
+    if(closed||!foreground||!settings.enabled||!settings.auto||settings.mode!=='remote'||!settings.configured||remotePoll<=0)return;
+    remoteTimer=setTimeout(()=>{
+      const current=policy();
+      if(!closed&&foreground&&current.enabled&&current.auto&&current.mode==='remote'&&current.configured&&online(current)){
+        request('sync').catch(()=>{});
+      }else scheduleRemotePoll();
+    },remotePoll);
+    remoteTimer.unref?.();
+  }
   function scheduleProbe(reset=false) {
     clearTimeout(probeTimer);
     const settings=policy();
+    if(settings.mode==='remote'){scheduleRemotePoll();return;}
+    clearTimeout(remoteTimer);
     if(closed||!foreground||!settings.enabled||!settings.auto||settings.mode!=='lan'||!settings.configured)return;
     if(reset)probeIndex=0;
     probeTimer=setTimeout(()=>{
@@ -78,7 +94,7 @@ export function createSyncScheduler({policy,network,snapshot,sync,probe,onOfflin
     if(!manual&&!foreground)return;
     if(manual&&!online({...settings,wifiOnly:false})) {
       await snapshot();onOffline();
-      throw Object.assign(Error('当前离线，修改已保留为本地版本。'),{code:'SYNC_OFFLINE'});
+      throw Object.assign(Error(tr("syncScheduler.offlineYourChangesWereSavedLocally")),{code:'SYNC_OFFLINE'});
     }
     const result=await sync();
     lastSync=Date.now();
@@ -121,6 +137,7 @@ export function createSyncScheduler({policy,network,snapshot,sync,probe,onOfflin
   function enter(active=true) {
     foreground=active;
     clearTimeout(probeTimer);
+    clearTimeout(remoteTimer);
     if(active){
       if(policy().pending||Date.now()-lastSync>=cooldown)request('sync').catch(()=>{});
       scheduleProbe(true);
@@ -133,6 +150,6 @@ export function createSyncScheduler({policy,network,snapshot,sync,probe,onOfflin
     },
     manual:()=>request('sync',true),
     refresh:()=>scheduleProbe(true),
-    dispose(){closed=true;clearTimeout(snapshotTimer);clearTimeout(syncTimer);clearTimeout(probeTimer);}
+    dispose(){closed=true;clearTimeout(snapshotTimer);clearTimeout(syncTimer);clearTimeout(probeTimer);clearTimeout(remoteTimer);}
   };
 }

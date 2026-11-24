@@ -1,3 +1,4 @@
+const {t:tr}=require("../shared/i18n/index.mjs");
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
@@ -16,20 +17,39 @@ const resolver=(root,notes)=>linkDirectory(root,notes).resolve;
 
 function validName(name) {
   if (typeof name !== 'string' || !name || /^[.]|[. ]$|[<>:"/\\|?*\x00-\x1f]|^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) || excluded.has(name.toLowerCase())) {
-    throw Error('名称不可用，请换一个文件或文件夹名称。');
+    throw Error(tr("workspace.pickADifferentFileOrFolderName"));
   }
   return name;
 }
 
-async function atomicWrite(target, data) {
-  const temp = target + '.' + randomUUID() + '.tmp';
+async function syncDirectory(dir) {
+  // Windows does not expose directory handles through Node's fs.open.
+  if(process.platform==='win32')return;
+  const handle=await fs.open(dir,'r');
+  try {await handle.sync();}
+  finally {await handle.close();}
+}
+
+async function atomicWriteFile(target,data,beforeReplace=async()=>true) {
+  const dir=path.dirname(target);
+  const temp=path.join(dir,'.calcite-tmp-'+randomUUID());
+  const mode=(await fs.lstat(target).catch(error=>{if(error.code!=='ENOENT')throw error;}))?.mode;
+  const handle=await fs.open(temp,'wx',0o600);
   try {
-    await fs.writeFile(temp, data, { flag: 'wx' });
-    await fs.rename(temp, target);
+    try {
+      await handle.writeFile(data);
+      if(mode!==undefined&&process.platform!=='win32')await handle.chmod(mode&0o777);
+      await handle.sync();
+    } finally {await handle.close();}
+    if(!await beforeReplace())return false;
+    await fs.rename(temp,target);
+    await syncDirectory(dir);
+    return true;
   } finally {
-    await fs.unlink(temp).catch(() => {});
+    await fs.unlink(temp).catch(error=>{if(error.code!=='ENOENT')console.warn(error);});
   }
 }
+const atomicWrite=atomicWriteFile;
 
 function historyStore(root) {
   const dir = note => path.join(root, createHash('sha256').update(key(note)).digest('hex'));
@@ -45,7 +65,7 @@ function historyStore(root) {
   async function record(note, text, limit) {
     const { folder, results } = await entries(note);
     await fs.mkdir(folder, {recursive:true});
-    await fs.writeFile(path.join(folder, Date.now() + '-' + randomUUID() + '.md'), text, {flag:'wx'});
+    await atomicWriteFile(path.join(folder, Date.now() + '-' + randomUUID() + '.md'), text);
     const keep = Math.max(1, Math.min(100, Number(limit) || 20));
     await Promise.all(results.filter(row => row.id !== 'legacy').slice(keep - 1).map(row => fs.unlink(path.join(folder, row.id))));
   }
@@ -54,7 +74,7 @@ function historyStore(root) {
     async list(note) { return (await entries(note)).results; },
     async read(note, id) {
       const {folder,legacy,results} = await entries(note);
-      if (!results.some(row => row.id === id)) throw Error('找不到该历史快照。');
+      if (!results.some(row => row.id === id)) throw Error(tr("workspace.historySnapshotNotFound"));
       return fs.readFile(id === 'legacy' ? legacy : path.join(folder,id), 'utf8');
     },
     async relocate(from, to, limit) {
@@ -74,4 +94,4 @@ function historyStore(root) {
   };
 }
 
-module.exports = { markdown, resolver, linkDirectory, validName, within, key, atomicWrite, historyStore, encode };
+module.exports = { markdown, resolver, linkDirectory, validName, within, key, atomicWrite, atomicWriteFile, syncDirectory, historyStore, encode };

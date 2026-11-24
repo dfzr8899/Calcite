@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="no_printable">There is no printable document.</string>
+    <string name="print_busy">Close the current print job first.</string>
+    <string name="print_unavailable">The system print service is unavailable.</string>
+    <string name="print_failed">Could not start system PDF printing.</string>
+    <string name="print_title">Calcite · PDF Export</string>
+    <string name="external_unrecognized">Could not identify the external file.</string>
+    <string name="external_select">Share a Markdown file.</string>
+    <string name="external_permission">Read access was denied. Open or share the file again from the source app.</string>
+    <string name="external_scheme">Open the Markdown file from the system file manager or share menu.</string>
+    <string name="external_revoked">The file is unavailable or access was revoked. Share it again from the source app.</string>
+    <string name="external_retry">Could not read the file. Share it again from the source app.</string>
+    <string name="external_read">Could not read the external file.</string>
+    <string name="external_limit">The external file exceeds 10 MiB.</string>
+    <string name="external_utf8">This file is not valid UTF-8 text and cannot be previewed.</string>
+    <string name="external_binary">This file contains binary data and cannot be previewed.</string>
+    <string name="external_empty">The external file is empty.</string>
+    <string name="external_untitled">Untitled Document.md</string>
+    <string name="clipboard_limit">The clipboard image exceeds 32 MiB.</string>
+    <string name="clipboard_empty">The clipboard image is empty.</string>
+    <string name="clipboard_read">Could not read the clipboard image.</string>
+    <string name="clipboard_missing">Clipboard content is missing.</string>
+    <string name="legacy_git_invalid">Invalid Git request parameters.</string>
+    <string name="legacy_git_failed">Git request failed on this version of Android. Check the network or repository URL.</string>
+    <string name="secure_unavailable">The system key is unavailable.</string>
+    <string name="secure_save_failed">Could not save the system key.</string>
+    <string name="external_queue_full">Too many files are waiting for preview. Close some previews and share the file again.</string>
+</resources>
